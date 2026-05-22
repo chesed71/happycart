@@ -1,0 +1,4 @@
+#include "Debug.xcconfig"
+
+FLAVOR=staging
+PRODUCT_BUNDLE_IDENTIFIER_SUFFIX=.staging

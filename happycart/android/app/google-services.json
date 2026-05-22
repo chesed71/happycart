@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "417373019518",
+    "project_id": "happycart-dev",
+    "storage_bucket": "happycart-dev.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:417373019518:android:6d5d968b68c9ed0969e72f",
+        "android_client_info": {
+          "package_name": "com.rimonhouse.happycart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBTVHbo9kghexrs8q43AGPerbqzgTZziNs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,4 @@
+#include "Debug.xcconfig"
+
+FLAVOR=development
+PRODUCT_BUNDLE_IDENTIFIER_SUFFIX=.dev

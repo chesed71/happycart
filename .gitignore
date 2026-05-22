@@ -1,0 +1,29 @@
+# HappyCart 모노레포 루트 .gitignore
+# Flutter 프로젝트 자체 ignore 는 happycart/.gitignore 가 담당.
+
+# macOS
+.DS_Store
+
+# Supabase CLI 로컬 캐시
+supabase/.temp/
+supabase/.branches/
+
+# 환경 변수
+.env
+.env.local
+*.local
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+
+# Dart / Flutter (백업)
+**/.dart_tool/
+**/build/
+**/.pub-cache/
+
+# Logs
+*.log
