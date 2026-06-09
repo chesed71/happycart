@@ -61,6 +61,8 @@ String reasonCodeLabel(String reasonCode) {
       return '브롬산칼륨';
     case BadReasonCode.maltodextrin:
       return '말토덱스트린';
+    case BadReasonCode.refinedSugar:
+      return '정제 설탕';
     default:
       return reasonCode;
   }

@@ -36,6 +36,9 @@ void main() {
     test('hydrogenated_oil', () {
       expect(reasonCodeLabel(BadReasonCode.hydrogenatedOil), '경화유 / 트랜스지방');
     });
+    test('refined_sugar (v1.1.0)', () {
+      expect(reasonCodeLabel(BadReasonCode.refinedSugar), '정제 설탕');
+    });
     test('unknown reason code falls back to the code itself', () {
       expect(reasonCodeLabel('unknown_reason'), 'unknown_reason');
     });

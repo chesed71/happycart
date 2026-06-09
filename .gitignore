@@ -27,3 +27,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# 견적서 (PDF/HTML, 로컬 전용 — git 추적 제외)
+docs/Quote/

@@ -43,6 +43,7 @@ class BadReasonCode {
   static const refinedFlour = 'refined_flour';
   static const bromate = 'bromate';
   static const maltodextrin = 'maltodextrin';
+  static const refinedSugar = 'refined_sugar';
 }
 
 /// Bad ingredient 사전 (스펙 §5.3 표).
@@ -258,5 +259,14 @@ const List<IngredientEntry> badIngredientCatalog = [
     canonicalKey: 'maltodextrin',
     reasonCode: BadReasonCode.maltodextrin,
     aliases: ['말토덱스트린', 'maltodextrin', 'E1400'],
+  ),
+
+  // === 정제 설탕 (v1.1.0 신설) ===
+  // 일단 "설탕" 단어만 잡는다. 정백당/분당/포도당/과당 등은 후속 버전 검토.
+  // substring 매칭이므로 "백설탕", "흑설탕", "황설탕" 등 파생 표기도 함께 매칭됨.
+  IngredientEntry(
+    canonicalKey: 'sugar',
+    reasonCode: BadReasonCode.refinedSugar,
+    aliases: ['설탕'],
   ),
 ];

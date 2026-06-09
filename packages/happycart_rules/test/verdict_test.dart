@@ -68,7 +68,7 @@ void main() {
 
     test('대두유 / 카놀라유 — seed oil 카테고리로 매칭', () {
       final result = computeVerdict(
-        const IngredientInput(tokens: ['대두유', '카놀라유', '설탕']),
+        const IngredientInput(tokens: ['대두유', '카놀라유', '물']),
       );
       expect(result.verdict, Verdict.notOkay);
       expect(result.reasonCodes, ['seed_oil']);
@@ -81,7 +81,7 @@ void main() {
     test('합성 보존제 + 색소 — reason code 두 개 누적', () {
       final result = computeVerdict(
         const IngredientInput(
-          tokens: ['밀가루', '설탕', 'BHA', '황색5호'],
+          tokens: ['밀가루', '정제염', 'BHA', '황색5호'],
         ),
       );
       expect(result.verdict, Verdict.notOkay);
@@ -89,6 +89,31 @@ void main() {
         'synthetic_preservative',
         'artificial_color',
       ]));
+    });
+
+    test('설탕 — refined_sugar 카테고리로 매칭 (v1.1.0)', () {
+      final result = computeVerdict(
+        const IngredientInput(tokens: ['밀가루', '설탕', '버터']),
+      );
+      expect(result.verdict, Verdict.notOkay);
+      expect(result.badCanonicalKeys, ['sugar']);
+      expect(result.reasonCodes, ['refined_sugar']);
+    });
+
+    test('백설탕 / 흑설탕 — substring 매칭 (v1.1.0)', () {
+      final result = computeVerdict(
+        const IngredientInput(tokens: ['백설탕']),
+      );
+      expect(result.verdict, Verdict.notOkay);
+      expect(result.badCanonicalKeys, ['sugar']);
+    });
+
+    test('정백당 / 분당 / 포도당은 매칭 안 됨 (v1.1.0 의도된 한계)', () {
+      final result = computeVerdict(
+        const IngredientInput(tokens: ['정백당', '분당', '포도당']),
+      );
+      expect(result.verdict, Verdict.okay);
+      expect(result.badMatches, isEmpty);
     });
 
     test('아질산나트륨 (가공육 케이스)', () {
@@ -194,7 +219,7 @@ void main() {
     });
   });
 
-  test('ruleVersion is v1.0.0', () {
-    expect(ruleVersion, 'v1.0.0');
+  test('ruleVersion is v1.1.0', () {
+    expect(ruleVersion, 'v1.1.0');
   });
 }

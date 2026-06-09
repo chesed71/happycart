@@ -94,6 +94,11 @@ String _renderInsert({
       .map((e) => e.toString())
       .toList(growable: false);
   final ingredientsRaw = product['ingredients_raw'] as String? ?? '';
+  final hasImageSourceUrl = product.containsKey('image_source_url');
+  final imageSourceColumn = hasImageSourceUrl ? ', image_source_url' : '';
+  final imageSourceValue = hasImageSourceUrl
+      ? ',\n  ${_nq(product['image_source_url'])}'
+      : '';
 
   return '''
 insert into public.products (
@@ -101,7 +106,7 @@ insert into public.products (
   ingredients_raw, ingredients_tokens,
   bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes,
   verdict, rule_version, computed_at,
-  source, source_url, source_checked_at, verified_status
+  source, source_url, source_checked_at, verified_status, image_url$imageSourceColumn
 ) values (
   ${_q(product['barcode'])},
   ${_q(product['brand'])},
@@ -119,7 +124,8 @@ insert into public.products (
   ${_q(product['source'])},
   ${_nq(product['source_url'])},
   ${_q(product['source_checked_at'])}::timestamptz,
-  ${_q(product['verified_status'] ?? 'verified')}::public.verified_status_enum
+  ${_q(product['verified_status'] ?? 'verified')}::public.verified_status_enum,
+  ${_nq(product['image_url'])}$imageSourceValue
 );
 ''';
 }

@@ -25,13 +25,25 @@ class AppTheme {
   static const Color brandStrong = Color(0xFFE85F00);
   static const Color brandSoft = Color(0xFFFFE6CC);
 
-  // === Verdict ===
+  // === Verdict (chip/badge 단색용) ===
   static const Color okay = Color(0xFF2E8B57);
   static const Color okayBg = Color(0xFFE0F2E5);
   static const Color notOkay = Color(0xFFD04437);
   static const Color notOkayBg = Color(0xFFFBE3DF);
   static const Color insufficient = Color(0xFF6B6660);
   static const Color insufficientBg = Color(0xFFEEE9E0);
+
+  // === Verdict 히어로 그라디언트 토큰 ===
+  static const Color okDeep = Color(0xFF10764A);
+  static const Color okGradA = Color(0xFF1FA869);
+  static const Color okGradB = Color(0xFF15875A);
+  static const Color okSoft = Color(0xFFE4F4EA);
+
+  static const Color stopDeep = Color(0xFF9E2D22);
+  static const Color stopMain = Color(0xFFE14A39);
+  static const Color stopSoft = Color(0xFFFCE5E1);
+  static const Color stopGradA = Color(0xFFEF5A45);
+  static const Color stopGradB = Color(0xFFD23A2C);
 
   static Color colorFor(Verdict v) {
     switch (v) {

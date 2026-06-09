@@ -22,6 +22,9 @@ class ProductLookupResult {
   /// 카테고리 (예: "올리브오일") — nullable.
   final String? category;
 
+  /// 제품 대표 이미지 URL — nullable.
+  final String? imageUrl;
+
   /// 룰 패키지가 결정한 최종 평가.
   final Verdict verdict;
 
@@ -53,6 +56,7 @@ class ProductLookupResult {
     required this.computedAt,
     required this.sourceCheckedAt,
     this.category,
+    this.imageUrl,
     this.badIngredients = const [],
     this.goodIngredients = const [],
     this.reasonCodes = const [],
@@ -77,14 +81,16 @@ class ProductLookupResult {
       name: row['name'] as String,
       size: row['size'] as String,
       category: row['category'] as String?,
+      imageUrl: row['image_url'] as String?,
       verdict: verdictFromWire(row['verdict'] as String),
       badIngredients: asStringList(row['bad_ingredients_detected']),
       goodIngredients: asStringList(row['good_ingredients_detected']),
       reasonCodes: asStringList(row['verdict_reason_codes']),
       ruleVersion: row['rule_version'] as String,
       computedAt: DateTime.parse(row['computed_at'] as String).toUtc(),
-      sourceCheckedAt:
-          DateTime.parse(row['source_checked_at'] as String).toUtc(),
+      sourceCheckedAt: DateTime.parse(
+        row['source_checked_at'] as String,
+      ).toUtc(),
     );
   }
 
