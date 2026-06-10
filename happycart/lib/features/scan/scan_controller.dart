@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -103,6 +105,7 @@ class ScanController extends Notifier<ScanState> {
       final latencyMs = stopwatch.elapsedMilliseconds;
 
       if (product == null) {
+        unawaited(repo.logPendingProduct(code));
         analytics.logNotFound(barcodeFormat: format, latencyMs: latencyMs);
         final result = ResultState.notFound(code);
         state = state.copyWith(lastResult: result);

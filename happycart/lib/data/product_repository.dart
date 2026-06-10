@@ -42,6 +42,20 @@ class ProductRepository {
   })  : _rpc = rpc,
         _timeout = timeout;
 
+  /// 미등록 바코드를 pending_products 테이블에 기록한다 (fire-and-forget).
+  ///
+  /// 실패해도 스캔 흐름에 영향을 주지 않으므로 예외를 삼킨다.
+  Future<void> logPendingProduct(String barcode) async {
+    try {
+      await _rpc(
+        'log_pending_product',
+        params: {'p_barcode': barcode},
+      ).timeout(_timeout);
+    } catch (_) {
+      // 백그라운드 적재 실패는 무시
+    }
+  }
+
   /// 바코드로 제품 1건을 조회한다.
   ///
   /// - 0 행이면 `null` (미등록).
