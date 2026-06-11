@@ -966,7 +966,17 @@ class _NotFoundLayout extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            Text(barcode, textAlign: TextAlign.center, style: _monoStyle),
+            // 미등록 바코드는 사용자가 읽고 제보할 수 있도록 크게 표시한다.
+            Text(
+              barcode,
+              textAlign: TextAlign.center,
+              style: _monoStyle.copyWith(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.inkSoft,
+                letterSpacing: 1.5,
+              ),
+            ),
             const Spacer(),
             const DisclaimerCard(),
             const SizedBox(height: 16),

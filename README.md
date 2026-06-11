@@ -233,7 +233,7 @@ clean fat (EVOO, 아보카도, 코코넛, grass-fed 버터), natural sweetener (
 1. flutter pub get
 2. dart run --verbosity=error tool/compute_verdicts.dart > ../supabase/migrations/0005_seed_products.sql
 3. supabase db push                                  ← 시드 적용
-4. flutter build apk --flavor development --release  ← release.jks 로 서명
+4. flutter build apk --flavor development --release --dart-define=FLAVOR=development  ← release.jks 로 서명
 5. firebase appdistribution:distribute build/.../app-development-release.apk \
      --app 1:417373019518:android:6d5d968b68c9ed0969e72f \
      --release-notes "버전 노트" \
@@ -353,8 +353,10 @@ flutter analyze
 ### Android Release 빌드
 ```bash
 cd /Users/ronen/Project/HappyCart/happycart
-flutter build apk --flavor development --release
+flutter build apk --flavor development --release --dart-define=FLAVOR=development
 ```
+**주의**: `--dart-define=FLAVOR=...` 누락 시 `Env.load()` 가 EnvLoadException 을 던져
+앱이 splash 화면에서 멈춘다 (gradle flavor 는 dart-define 을 주입하지 않음).
 
 ### Firebase App Distribution 업로드
 ```bash
