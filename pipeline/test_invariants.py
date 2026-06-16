@@ -289,6 +289,42 @@ def test_rollback_shared_barcode():
         conn.rollback()
 
 
+def test_rollback_divergent_owner():
+    """rollback: 같은 barcode를 verified·non-verified가 다른 master로 주장하는(divergent)
+    손상 데이터. verified를 진실로 보고, 그 barcode가 verified의 master에 그대로 남고
+    link(master_id)도 verified.promoted_master_id와 일치해야 한다."""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
+             source_checked_at,verified_status)
+            values ('B','MV','mv-i','insufficient','v1',now(),'t',now(),'unverified'),
+                   ('B','MN','mn-i','insufficient','v1',now(),'t',now(),'unverified')
+            returning id""")
+        mv = cur.fetchone()[0]
+        cur.execute("select id from product_masters where ingredients_raw='mn-i'")
+        mn = cur.fetchone()[0]
+        # verified: barcode X, master MV (일관). non-verified: barcode X, master MN (divergent).
+        vid = _fixture(cur, stage="promoted", barcode=SYN_BC_1, review_decision="verified")
+        nid = _fixture(cur, stage="promoted", barcode=SYN_BC_1, review_decision=None)
+        cur.execute("update collected_products set promoted_master_id=%s where id=%s", (mv, vid))
+        cur.execute("update collected_products set promoted_master_id=%s where id=%s", (mn, nid))
+        # 실제 link: X → MV (verified 소유)
+        cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')",
+                    (SYN_BC_1, mv))
+        cur.execute("select public.rollback_ungated_promotions()")
+        cur.execute("select master_id from product_barcodes where barcode=%s", (SYN_BC_1,))
+        row = cur.fetchone()
+        check("divergent: verified barcode 보존", row is not None)
+        check("divergent: link == verified.promoted_master_id", row and str(row[0]) == str(mv),
+              f"{row and row[0]} vs {mv}")
+        cur.execute("select stage from collected_products where id=%s", (vid,))
+        check("divergent: verified promoted 유지", cur.fetchone()[0] == "promoted")
+        cur.execute("select exists(select 1 from product_masters where id=%s)", (mv,))
+        check("divergent: verified master(MV) 보존", cur.fetchone()[0] is True)
+        conn.rollback()
+
+
 def test_no_clobber():
     """extract upsert: reviewed_at 있는 행은 갱신 제외 (UPSERT_SQL where 절 검증)."""
     from common import UPSERT_SQL
@@ -300,7 +336,7 @@ def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
               test_rollback_scope, test_rollback_shared_master,
-              test_rollback_shared_barcode, test_no_clobber]:
+              test_rollback_shared_barcode, test_rollback_divergent_owner, test_no_clobber]:
         try:
             t()
         except Exception as e:  # noqa
