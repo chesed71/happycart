@@ -19,6 +19,20 @@ REVIEW_DSN = "postgresql://datadesk_review:datadesk_review@127.0.0.1:54322/happy
 results: list[tuple[str, bool, str]] = []
 
 
+def ean13(prefix12: str) -> str:
+    """12자리 prefix에 EAN-13 체크 디지트를 붙인다 (is_valid_ean과 동일 규칙)."""
+    total = 0
+    for idx, c in enumerate(prefix12):
+        i = idx + 1
+        total += int(c) * (3 if (12 - i) % 2 == 0 else 1)
+    return prefix12 + str((10 - total % 10) % 10)
+
+
+# 시드/실데이터와 충돌하지 않는 합성 바코드 (prefix '99...')
+SYN_BC_1 = ean13("990000000000")
+SYN_BC_2 = ean13("990000000001")
+
+
 def check(name: str, cond: bool, detail: str = "") -> None:
     results.append((name, cond, detail))
 
@@ -174,6 +188,72 @@ def test_rollback_scope():
         conn.rollback()
 
 
+def test_promote_locks_during_review():
+    """promote 측 잠금: 후보 FOR UPDATE 가 잡힌 동안 review RPC 가 대기(경쟁 차단).
+
+    이전 테스트(test_for_update_race)는 RPC가 기존 잠금 뒤에서 대기함만 봤다.
+    여기선 promote.py 와 동일한 후보 SELECT ... FOR UPDATE 가 review 를 막는지 본다.
+    """
+    with psycopg.connect(dsn()) as s, s.cursor() as sc:
+        sc.execute("begin")
+        cid = _fixture(sc, stage="judged", review_decision="verified", barcode="8801037088168")
+        s.commit()
+    try:
+        promoter = psycopg.connect(dsn())
+        pc = promoter.cursor()
+        pc.execute("begin")
+        # promote.py 의 후보 잠금과 동일
+        pc.execute("""select id from collected_products
+                      where id=%s and stage='judged' and review_decision='verified'
+                      for update""", (cid,))
+        check("promote 후보 FOR UPDATE 획득", pc.fetchone() is not None)
+        with psycopg.connect(dsn()) as c2conn, c2conn.cursor() as c2:
+            c2.execute("set statement_timeout='800ms'")
+            try:
+                c2.execute("select public.review_collected_product(%s,%s,%s,%s,%s,%s)",
+                           (cid, "8801037088168", "x", "high", "verified", ""))
+                check("promote 잠금 중 review 대기", False, "대기 안 함")
+            except psycopg.Error as e:
+                check("promote 잠금 중 review 대기", "timeout" in str(e).lower(), str(e)[:40])
+        promoter.rollback()
+        pc.close(); promoter.close()
+    finally:
+        with psycopg.connect(dsn()) as cl, cl.cursor() as cc:
+            cc.execute("delete from collected_products where id=%s", (cid,))
+            cl.commit()
+
+
+def test_rollback_shared_master():
+    """rollback 실제 실행: verified/non-verified 가 공유한 master 에서 verified 보존."""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
+             source_checked_at,verified_status)
+            values ('B','N','shared-i','insufficient','v1',now(),'t',now(),'unverified')
+            returning id""")
+        m = cur.fetchone()[0]
+        vid = _fixture(cur, stage="promoted", barcode=SYN_BC_1, review_decision="verified")
+        nid = _fixture(cur, stage="promoted", barcode=SYN_BC_2, review_decision=None)
+        cur.execute("update collected_products set promoted_master_id=%s where id in (%s,%s)",
+                    (m, vid, nid))
+        cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1'),(%s,%s,'1')",
+                    (SYN_BC_1, m, SYN_BC_2, m))
+        # 실제 rollback 함수 실행
+        cur.execute("select public.rollback_ungated_promotions()")
+        cur.execute("select exists(select 1 from product_masters where id=%s)", (m,))
+        check("rollback: 공유 master 보존", cur.fetchone()[0] is True)
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (SYN_BC_1,))
+        check("rollback: verified 바코드 보존", cur.fetchone()[0] is True)
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (SYN_BC_2,))
+        check("rollback: non-verified 바코드 제거", cur.fetchone()[0] is False)
+        cur.execute("select stage from collected_products where id=%s", (nid,))
+        check("rollback: non-verified 행→judged", cur.fetchone()[0] == "judged")
+        cur.execute("select stage from collected_products where id=%s", (vid,))
+        check("rollback: verified 행 promoted 유지", cur.fetchone()[0] == "promoted")
+        conn.rollback()
+
+
 def test_no_clobber():
     """extract upsert: reviewed_at 있는 행은 갱신 제외 (UPSERT_SQL where 절 검증)."""
     from common import UPSERT_SQL
@@ -183,7 +263,8 @@ def test_no_clobber():
 
 def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
-              test_least_privilege, test_for_update_race, test_rollback_scope, test_no_clobber]:
+              test_least_privilege, test_for_update_race, test_promote_locks_during_review,
+              test_rollback_scope, test_rollback_shared_master, test_no_clobber]:
         try:
             t()
         except Exception as e:  # noqa

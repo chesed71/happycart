@@ -50,6 +50,7 @@ def main():
               and confidence is distinct from 'low'
               and review_decision = 'verified'   -- 확인완료 게이트 (§8-1 확정)
             order by source, source_ref
+            for update   -- 후보 행을 트랜잭션 동안 잠가 review RPC와의 경쟁 차단
         """)
         rows = cur.fetchall()
         # 승격 보류 사유별 카운트 (judged인데 조건 미달)
