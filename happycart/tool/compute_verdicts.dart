@@ -13,12 +13,6 @@
 ///
 /// 재실행 시 동일 fixture (특히 `fixed_computed_at`) 이면 byte-identical 출력 —
 /// migration idempotency 유지.
-///
-/// JSON 모드 (적재 파이프라인 judge 단계용 — pipeline/judge.py 참고):
-///   dart run --verbosity=error tool/compute_verdicts.dart --json < in.json > out.json
-///   입력:  [{"ref": "...", "tokens": ["밀가루", ...]}, ...]
-///   출력:  [{"ref", "verdict", "bad_ingredients_detected",
-///           "good_ingredients_detected", "verdict_reason_codes", "rule_version"}, ...]
 library;
 
 import 'dart:convert';
@@ -29,10 +23,6 @@ import 'package:happycart_rules/happycart_rules.dart';
 const _defaultFixturePath = 'tool/fixtures/seed_products.json';
 
 void main(List<String> args) {
-  if (args.isNotEmpty && args.first == '--json') {
-    _runJsonMode();
-    return;
-  }
   final fixturePath = args.isEmpty ? _defaultFixturePath : args.first;
   final file = File(fixturePath);
   if (!file.existsSync()) {
@@ -84,35 +74,6 @@ void main(List<String> args) {
   }
 
   stdout.write(buffer.toString());
-}
-
-/// stdin의 JSON 배열을 판정해 stdout으로 JSON 배열을 출력한다.
-/// SQL 모드와 동일하게 happycart_rules의 computeVerdict만 사용 — 룰 단일 소스 유지.
-void _runJsonMode() {
-  final lines = <String>[];
-  while (true) {
-    final line = stdin.readLineSync();
-    if (line == null) break;
-    lines.add(line);
-  }
-  final items =
-      (jsonDecode(lines.join('\n')) as List).cast<Map<String, dynamic>>();
-  final results = <Map<String, dynamic>>[];
-  for (final item in items) {
-    final tokens = ((item['tokens'] as List?) ?? const [])
-        .map((e) => e.toString())
-        .toList(growable: false);
-    final result = computeVerdict(IngredientInput(tokens: tokens));
-    results.add({
-      'ref': item['ref'],
-      'verdict': result.verdict.wireName,
-      'bad_ingredients_detected': result.badCanonicalKeys,
-      'good_ingredients_detected': result.goodCanonicalKeys,
-      'verdict_reason_codes': result.reasonCodes,
-      'rule_version': ruleVersion,
-    });
-  }
-  stdout.write(jsonEncode(results));
 }
 
 void _writeHeader(StringBuffer buffer) {
