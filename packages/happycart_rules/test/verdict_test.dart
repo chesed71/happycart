@@ -2,19 +2,19 @@ import 'package:happycart_rules/happycart_rules.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('computeVerdict — empty / insufficient', () {
-    test('empty tokens → insufficient', () {
-      final result = computeVerdict(const IngredientInput(tokens: []));
-      expect(result.verdict, Verdict.insufficient);
-      expect(result.badMatches, isEmpty);
-      expect(result.goodMatches, isEmpty);
+  group('computeVerdict — empty tokens (판정 불가)', () {
+    test('empty tokens → ArgumentError', () {
+      expect(
+        () => computeVerdict(const IngredientInput(tokens: [])),
+        throwsArgumentError,
+      );
     });
 
-    test('only blank tokens → insufficient', () {
-      final result = computeVerdict(
-        const IngredientInput(tokens: ['', '   ', '\n']),
+    test('only blank tokens → ArgumentError', () {
+      expect(
+        () => computeVerdict(const IngredientInput(tokens: ['', '   ', '\n'])),
+        throwsArgumentError,
       );
-      expect(result.verdict, Verdict.insufficient);
     });
   });
 

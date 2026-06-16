@@ -74,18 +74,6 @@ class AnalyticsClient {
     );
   }
 
-  Future<void> logInsufficient({
-    required String barcodeFormat,
-    required int latencyMs,
-  }) {
-    return _send(
-      eventType: 'insufficient',
-      barcodeFormat: barcodeFormat,
-      verdict: Verdict.insufficient.wireName,
-      latencyMs: latencyMs,
-    );
-  }
-
   Future<void> logNetworkError({
     required String barcodeFormat,
     required int latencyMs,

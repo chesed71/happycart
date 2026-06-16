@@ -12,18 +12,11 @@ void main() {
       const result = VerdictResult(verdict: Verdict.notOkay);
       expect(computeHeadline(result), '잠깐, 이런 성분이 들어 있어요');
     });
-
-    test('insufficient → "이 제품의 원재료 정보를 확인하지 못했어요"', () {
-      const result = VerdictResult(verdict: Verdict.insufficient);
-      expect(computeHeadline(result), '이 제품의 원재료 정보를 확인하지 못했어요');
-    });
   });
 
   group('verdictLabel', () {
     test('okay label', () => expect(verdictLabel(Verdict.okay), '괜찮아요'));
     test('notOkay label', () => expect(verdictLabel(Verdict.notOkay), '잠깐'));
-    test('insufficient label',
-        () => expect(verdictLabel(Verdict.insufficient), '판단 보류'));
   });
 
   group('reasonCodeLabel', () {

@@ -10,10 +10,11 @@ const String ruleVersion = 'v1.1.0';
 ///
 /// - [okay]: 매칭된 bad ingredient 없음.
 /// - [notOkay]: bad ingredient 1개 이상 매칭.
-/// - [insufficient]: 원재료 정보가 비어있어 판정 불가.
 ///
 /// 미등록(`not_found`)은 DB 행 부재로 표현되므로 enum에 포함하지 않는다.
-enum Verdict { okay, notOkay, insufficient }
+/// 원재료 정보가 없는 제품은 판정 대상이 아니므로 products 테이블에 적재하지
+/// 않는다 ([computeVerdict] 가 빈 토큰에 대해 throw).
+enum Verdict { okay, notOkay }
 
 extension VerdictWire on Verdict {
   /// DB enum / RPC 응답에서 사용하는 wire 표기.
@@ -23,8 +24,6 @@ extension VerdictWire on Verdict {
         return 'okay';
       case Verdict.notOkay:
         return 'not_okay';
-      case Verdict.insufficient:
-        return 'insufficient';
     }
   }
 }
@@ -36,8 +35,6 @@ Verdict verdictFromWire(String wire) {
       return Verdict.okay;
     case 'not_okay':
       return Verdict.notOkay;
-    case 'insufficient':
-      return Verdict.insufficient;
     default:
       throw ArgumentError('Unknown verdict wire: $wire');
   }
@@ -48,7 +45,7 @@ Verdict verdictFromWire(String wire) {
 /// [tokens] 는 라벨에서 추출·정규화된 원재료 토큰 리스트.
 /// 정규화는 시드/관리 파이프라인에서 수행 — 룰 패키지는 비교만 한다.
 ///
-/// 빈 리스트는 [Verdict.insufficient].
+/// 빈 리스트는 판정 불가 — [computeVerdict] 가 ArgumentError 를 던진다.
 class IngredientInput {
   final List<String> tokens;
 
@@ -141,13 +138,17 @@ class VerdictResult {
 /// 룰 핵심 — 토큰 리스트 → VerdictResult (스펙 §5.5).
 ///
 /// 알고리즘:
-/// 1. tokens 비어있으면 → insufficient.
+/// 1. tokens 비어있으면 → ArgumentError (판정 불가, 적재 대상 아님).
 /// 2. 각 토큰을 normalize 후 bad/good 사전과 매칭.
 /// 3. bad 매칭 1개 이상이면 → notOkay. 아니면 → okay.
 /// 4. good 매칭은 결과 화면 보조 — verdict 산정에는 영향 없음.
 VerdictResult computeVerdict(IngredientInput input) {
   if (input.tokens.isEmpty) {
-    return const VerdictResult(verdict: Verdict.insufficient);
+    throw ArgumentError.value(
+      input.tokens,
+      'input.tokens',
+      '원재료 토큰이 비어 있어 판정할 수 없습니다 (적재 대상 아님)',
+    );
   }
 
   final normalizedTokens = input.tokens
@@ -156,7 +157,11 @@ VerdictResult computeVerdict(IngredientInput input) {
       .toList(growable: false);
 
   if (normalizedTokens.isEmpty) {
-    return const VerdictResult(verdict: Verdict.insufficient);
+    throw ArgumentError.value(
+      input.tokens,
+      'input.tokens',
+      '정규화 후 유효한 원재료 토큰이 없어 판정할 수 없습니다',
+    );
   }
 
   final badMatches = <IngredientMatch>[];

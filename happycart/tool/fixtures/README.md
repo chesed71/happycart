@@ -47,7 +47,7 @@
 | `verified_status` | ❌ | 기본 `verified`. 검수 전이라면 `unverified` |
 | `image_url` | ❌ | 앱에 노출할 대표 이미지 URL. 가능하면 Supabase Storage 공개 URL |
 | `image_source_url` | ❌ | 대표 이미지를 만들 때 사용한 원본 벤더/CDN URL. 앱 RPC에는 노출하지 않음 |
-| `expected_verdict` | ❌ | 선택. sanity check 용 (`okay` / `not_okay` / `insufficient`) |
+| `expected_verdict` | ❌ | 선택. sanity check 용 (`okay` / `not_okay`) |
 
 룰 매칭 결과(`verdict`, `bad_ingredients_detected`, `good_ingredients_detected`,
 `verdict_reason_codes`, `rule_version`, `computed_at`) 는 `compute_verdicts.dart`

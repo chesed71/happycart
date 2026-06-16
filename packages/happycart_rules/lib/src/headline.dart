@@ -5,15 +5,12 @@ import 'verdict.dart';
 ///
 /// - okay: "마음 편히 담아도 괜찮아요"
 /// - notOkay: "잠깐, 이런 성분이 들어 있어요"
-/// - insufficient: "이 제품의 원재료 정보를 확인하지 못했어요"
 String computeHeadline(VerdictResult result) {
   switch (result.verdict) {
     case Verdict.okay:
       return '마음 편히 담아도 괜찮아요';
     case Verdict.notOkay:
       return '잠깐, 이런 성분이 들어 있어요';
-    case Verdict.insufficient:
-      return '이 제품의 원재료 정보를 확인하지 못했어요';
   }
 }
 
@@ -27,8 +24,6 @@ String verdictLabel(Verdict verdict) {
       return '괜찮아요';
     case Verdict.notOkay:
       return '잠깐';
-    case Verdict.insufficient:
-      return '판단 보류';
   }
 }
 

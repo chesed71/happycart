@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/barcode_validator.dart';
-import '../../core/verdict.dart';
 import '../../data/analytics_client.dart';
 import '../../data/exceptions.dart';
 import '../../data/product_repository.dart';
@@ -108,12 +107,6 @@ class ScanController extends Notifier<ScanState> {
         unawaited(repo.logPendingProduct(code));
         analytics.logNotFound(barcodeFormat: format, latencyMs: latencyMs);
         final result = ResultState.notFound(code);
-        state = state.copyWith(lastResult: result);
-        return result;
-      }
-      if (product.verdict == Verdict.insufficient) {
-        analytics.logInsufficient(barcodeFormat: format, latencyMs: latencyMs);
-        final result = ResultState.insufficient(product);
         state = state.copyWith(lastResult: result);
         return result;
       }

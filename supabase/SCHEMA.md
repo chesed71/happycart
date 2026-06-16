@@ -1,7 +1,7 @@
 # HappyCart Supabase DB 스키마
 
 프로젝트: `ftgsnvvskbadegswvjnp` (https://ftgsnvvskbadegswvjnp.supabase.co)
-최종 마이그레이션: `0013_pending_products.sql`
+최종 마이그레이션: `0014_remove_insufficient_verdict.sql`
 
 > 이 문서는 `supabase/migrations/` 의 누적 결과를 요약한 것이다.
 > 스키마 변경 시 마이그레이션과 함께 이 문서도 갱신할 것.
@@ -39,7 +39,7 @@ service_role 만 RLS 를 우회한다 (Data Desk, 업로드 스크립트).
 
 | 타입 | 값 | 용도 |
 |------|-----|------|
-| `verdict_enum` | `okay`, `not_okay`, `insufficient` | 룰 엔진 판정 결과 |
+| `verdict_enum` | `okay`, `not_okay` | 룰 엔진 판정 결과 (0014 에서 `insufficient` 제거) |
 | `verified_status_enum` | `unverified`, `verified`, `needs_review` | 데이터 검증 상태. `verified` 만 앱에 노출 |
 | `pending_status_enum` | `pending`, `registered`, `ignored` | 미등록 상품 처리 상태 |
 
@@ -82,7 +82,7 @@ service_role 만 RLS 를 우회한다 (Data Desk, 업로드 스크립트).
 | `products_barcode_format` | barcode 는 8자리 또는 13자리 숫자 |
 | `products_not_okay_requires_bad_match` | `not_okay` 이면 `bad_ingredients_detected` 1개 이상 |
 | `products_okay_requires_no_bad_match` | `okay` 이면 `bad_ingredients_detected` 비어야 함 |
-| `products_insufficient_requires_empty_tokens` | `insufficient` 이면 `ingredients_tokens` 비어야 함 |
+| `products_requires_ingredient_tokens` | `ingredients_tokens` 가 1개 이상 (모든 제품은 판정 가능해야 함, 0014) |
 
 **인덱스**: `products_verdict_idx` (verdict)
 
@@ -95,9 +95,9 @@ service_role 만 RLS 를 우회한다 (Data Desk, 업로드 스크립트).
 | 컬럼 | 타입 | 제약 | 설명 |
 |------|------|------|------|
 | `id` | bigserial | PK | |
-| `event_type` | text | NOT NULL, CHECK | `scan_success` / `not_found` / `insufficient` / `network_error` |
+| `event_type` | text | NOT NULL, CHECK | `scan_success` / `not_found` / `network_error` |
 | `barcode_format` | text | NOT NULL, CHECK | `EAN-13` / `EAN-8` |
-| `verdict` | text | CHECK (null 허용) | `okay` / `not_okay` / `insufficient` |
+| `verdict` | text | CHECK (null 허용) | `okay` / `not_okay` |
 | `scan_latency_ms` | integer | NOT NULL, 0~60000 | |
 | `app_version` | text | NOT NULL, `^\d+\.\d+\.\d+(\+\d+)?$` | |
 | `platform` | text | NOT NULL, CHECK | `ios` / `android` |
@@ -191,3 +191,4 @@ PNG 원본은 업로드 전 JPEG 변환 필요 — `upload_to_supabase.py` (happ
 | 0011 | product_images_storage.sql | product-images 버킷 |
 | 0012 | product_image_source_url.sql | products.image_source_url 컬럼 |
 | 0013 | pending_products.sql | pending_products 테이블 + log_pending_product RPC |
+| 0014 | remove_insufficient_verdict.sql | verdict_enum 에서 `insufficient` 제거, 토큰 필수 제약 추가, scan_events/log_scan_event 정리 |

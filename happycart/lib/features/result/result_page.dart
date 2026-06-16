@@ -26,8 +26,6 @@ class ResultPage extends StatelessWidget {
           _SuccessLayout(product: product, onRescan: onRescan),
         NotFoundResultState(:final barcode) =>
           _NotFoundLayout(barcode: barcode, onRescan: onRescan),
-        InsufficientResultState(:final product) =>
-          _InsufficientLayout(product: product, onRescan: onRescan),
         NetworkErrorResultState(:final onRetry) =>
           _NetworkErrorLayout(onRetry: onRetry, onRescan: onRescan),
       },
@@ -77,17 +75,6 @@ _VT _vt(Verdict v) {
         word: '잠깐',
         icon: Icons.block_rounded,
         sub: '초가공·인공 첨가물이 발견됐어요. 성분을 확인해보세요.',
-      );
-    case Verdict.insufficient:
-      return const _VT(
-        gradA: Color(0xFF8C8480),
-        gradB: Color(0xFF6B6660),
-        deep: Color(0xFF4A4540),
-        main: AppTheme.insufficient,
-        soft: AppTheme.insufficientBg,
-        word: '정보 부족',
-        icon: Icons.help_outline_rounded,
-        sub: '성분 정보를 충분히 확인하지 못했어요.',
       );
   }
 }
@@ -919,7 +906,7 @@ class _NoteBanner extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────
-// 비-성공 레이아웃 (NotFound / Insufficient / NetworkError)
+// 비-성공 레이아웃 (NotFound / NetworkError)
 // ────────────────────────────────────────────────────────────────
 class _NotFoundLayout extends StatelessWidget {
   final String barcode;
@@ -976,67 +963,6 @@ class _NotFoundLayout extends StatelessWidget {
                 color: AppTheme.inkSoft,
                 letterSpacing: 1.5,
               ),
-            ),
-            const Spacer(),
-            const DisclaimerCard(),
-            const SizedBox(height: 16),
-            _ScanButton(label: '다시 스캔하기', onPressed: onRescan),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InsufficientLayout extends StatelessWidget {
-  final ProductLookupResult product;
-  final VoidCallback onRescan;
-  const _InsufficientLayout({required this.product, required this.onRescan});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Align(
-              alignment: Alignment.topLeft,
-              child: IconButton(
-                onPressed: onRescan,
-                icon: const Icon(Icons.chevron_left_rounded),
-                color: AppTheme.ink,
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Icon(Icons.info_outline, size: 72, color: AppTheme.inkMute),
-            const SizedBox(height: 24),
-            const Text(
-              '이 제품의 원재료 정보를 확인하지 못했어요',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                color: AppTheme.ink,
-                letterSpacing: -0.4,
-              ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              '라벨 정보가 일부 누락된 제품이에요.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: AppTheme.inkSoft,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              product.barcode,
-              textAlign: TextAlign.center,
-              style: _monoStyle,
             ),
             const Spacer(),
             const DisclaimerCard(),

@@ -6,7 +6,7 @@
     "  ingredients_raw (라벨 원문),",
     "  ingredients_tokens (정규화된 토큰 리스트 — 룰 매칭 입력),",
     "  source, source_url, source_checked_at, verified_status,",
-    "  expected_verdict (선택 — 'okay'|'not_okay'|'insufficient', sanity check)"
+    "  expected_verdict (선택 — 'okay'|'not_okay', sanity check)"
   ],
   "products": [
     {

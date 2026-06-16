@@ -6,7 +6,7 @@ import '../core/verdict.dart';
 /// HappyCart 디자인 토큰 (스펙 §6.3) 과 앱 [ThemeData] 팩토리.
 ///
 /// 메인 브랜드 컬러는 아이콘의 오렌지(#FF7A1A). verdict 컬러는 okay=그린,
-/// notOkay=레드, insufficient=뉴트럴 그레이. Pretendard 는 google_fonts 카탈로그에
+/// notOkay=레드. Pretendard 는 google_fonts 카탈로그에
 /// 없어 Noto Sans KR 로 대체한다. 로컬 번들링은 후속 작업.
 class AppTheme {
   AppTheme._();
@@ -30,8 +30,6 @@ class AppTheme {
   static const Color okayBg = Color(0xFFE0F2E5);
   static const Color notOkay = Color(0xFFD04437);
   static const Color notOkayBg = Color(0xFFFBE3DF);
-  static const Color insufficient = Color(0xFF6B6660);
-  static const Color insufficientBg = Color(0xFFEEE9E0);
 
   // === Verdict 히어로 그라디언트 토큰 ===
   static const Color okDeep = Color(0xFF10764A);
@@ -51,8 +49,6 @@ class AppTheme {
         return okay;
       case Verdict.notOkay:
         return notOkay;
-      case Verdict.insufficient:
-        return insufficient;
     }
   }
 
@@ -62,8 +58,6 @@ class AppTheme {
         return okayBg;
       case Verdict.notOkay:
         return notOkayBg;
-      case Verdict.insufficient:
-        return insufficientBg;
     }
   }
 
