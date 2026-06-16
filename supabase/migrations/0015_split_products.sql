@@ -9,10 +9,10 @@
 --   2. 기존 products 행 이전 — brand + ingredients_raw 완전 일치 그룹은 하나의 master 로
 --   3. lookup_product 를 조인 버전으로 재작성 (반환 형태는 기존과 동일)
 --   4. log_pending_product 존재 확인을 product_barcodes 로 변경
---   5. 구 products 쓰기 동결 (0015 에서 drop 전까지 읽기 전용)
+--   5. 구 products 쓰기 동결 (0016 에서 drop 전까지 읽기 전용)
 --   6. 이전 검증 assert
 --
--- products 테이블 자체는 0015 에서 drop 한다 (롤백 유예).
+-- products 테이블 자체는 0016 에서 drop 한다 (롤백 유예).
 
 -- ── 1. product_masters ───────────────────────────────────────────────────────
 
@@ -49,10 +49,11 @@ create table public.product_masters (
   constraint masters_not_okay_requires_bad_match
     check (verdict <> 'not_okay' or array_length(bad_ingredients_detected, 1) >= 1),
   constraint masters_okay_requires_no_bad_match
-    check (verdict <> 'okay' or coalesce(array_length(bad_ingredients_detected, 1), 0) = 0),
-  constraint masters_insufficient_requires_empty_tokens
-    check (verdict <> 'insufficient' or coalesce(array_length(ingredients_tokens, 1), 0) = 0)
+    check (verdict <> 'okay' or coalesce(array_length(bad_ingredients_detected, 1), 0) = 0)
 );
+-- 주: verdict 가 okay/not_okay 두 값뿐이므로 (0014 에서 insufficient 제거),
+-- 빈 토큰을 막는 별도 제약은 두지 않는다 — 룰 엔진(computeVerdict 가 빈 토큰에
+-- ArgumentError)과 업로드 파이프라인(원재료 필수)이 상류에서 이미 보장한다.
 
 create unique index product_masters_ingredients_hash_idx
   on public.product_masters (ingredients_hash);
@@ -112,7 +113,7 @@ begin
   ) g;
   if v_mixed > 0 then
     raise exception
-      '0014 precheck failed: % group(s) mix verified_status — resolve manually before migrating (select brand, ingredients_raw from products group by 1,2 having count(distinct verified_status) > 1)',
+      '0015 precheck failed: % group(s) mix verified_status — resolve manually before migrating (select brand, ingredients_raw from products group by 1,2 having count(distinct verified_status) > 1)',
       v_mixed;
   end if;
 end;
@@ -228,14 +229,14 @@ grant execute on function public.log_pending_product(text) to anon, authenticate
 
 -- ── 6. 구 products 쓰기 동결 ──────────────────────────────────────────────────
 -- service_role 은 RLS 를 우회하므로, 구 경로 도구의 실수 기록은 트리거로만 막을
--- 수 있다. 읽기는 허용 (롤백 대조용). 0015 에서 테이블과 함께 제거.
+-- 수 있다. 읽기는 허용 (롤백 대조용). 0016 에서 테이블과 함께 제거.
 
 create function public.tg_products_frozen()
 returns trigger
 language plpgsql
 as $$
 begin
-  raise exception 'products is frozen since 0014 — write to product_masters / product_barcodes instead';
+  raise exception 'products is frozen since 0015 — write to product_masters / product_barcodes instead';
 end;
 $$;
 
@@ -259,10 +260,10 @@ begin
   select count(distinct (brand, ingredients_raw)) into v_groups from public.products;
 
   if v_barcodes <> v_products then
-    raise exception '0014 verify failed: barcodes(%) <> products(%)', v_barcodes, v_products;
+    raise exception '0015 verify failed: barcodes(%) <> products(%)', v_barcodes, v_products;
   end if;
   if v_masters <> v_groups then
-    raise exception '0014 verify failed: masters(%) <> distinct groups(%)', v_masters, v_groups;
+    raise exception '0015 verify failed: masters(%) <> distinct groups(%)', v_masters, v_groups;
   end if;
 end;
 $$;

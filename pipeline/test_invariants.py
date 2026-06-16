@@ -170,8 +170,8 @@ def test_rollback_scope():
         # 가짜 master 2개 + collected 2개 (verified / non-verified) promoted
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at)
-            values ('B','N1','i1','insufficient','v1',now(),'t',now()),
-                   ('B','N2','i2','insufficient','v1',now(),'t',now())
+            values ('B','N1','i1','okay','v1',now(),'t',now()),
+                   ('B','N2','i2','okay','v1',now(),'t',now())
             returning id""")
         m1 = cur.fetchone()[0]
         cur.execute("select id from product_masters order by created_at desc limit 1 offset 0")
@@ -235,7 +235,7 @@ def test_rollback_shared_master():
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
              source_checked_at,verified_status)
-            values ('B','N','shared-i','insufficient','v1',now(),'t',now(),'unverified')
+            values ('B','N','shared-i','okay','v1',now(),'t',now(),'unverified')
             returning id""")
         m = cur.fetchone()[0]
         vid = _fixture(cur, stage="promoted", barcode=SYN_BC_1, review_decision="verified")
@@ -267,7 +267,7 @@ def test_rollback_shared_barcode():
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
              source_checked_at,verified_status)
-            values ('B','N','shared-bc','insufficient','v1',now(),'t',now(),'unverified')
+            values ('B','N','shared-bc','okay','v1',now(),'t',now(),'unverified')
             returning id""")
         m = cur.fetchone()[0]
         # 두 행이 같은 barcode (손상 상태). product_barcodes는 PK라 1행만 존재.
@@ -298,8 +298,8 @@ def test_rollback_divergent_owner():
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
              source_checked_at,verified_status)
-            values ('B','MV','mv-i','insufficient','v1',now(),'t',now(),'unverified'),
-                   ('B','MN','mn-i','insufficient','v1',now(),'t',now(),'unverified')
+            values ('B','MV','mv-i','okay','v1',now(),'t',now(),'unverified'),
+                   ('B','MN','mn-i','okay','v1',now(),'t',now(),'unverified')
             returning id""")
         mv = cur.fetchone()[0]
         cur.execute("select id from product_masters where ingredients_raw='mn-i'")
