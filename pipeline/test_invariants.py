@@ -37,9 +37,13 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     results.append((name, cond, detail))
 
 
+_ctr = [0]
+
+
 def _fixture(cur, *, stage="judged", barcode="8801037088168", ingredients="밀가루, 설탕",
              confidence="high", review_decision=None, verdict="not_okay") -> str:
     """collected_products 테스트 행 1개 생성, id 반환. (호출 트랜잭션 내에서만 유효)"""
+    _ctr[0] += 1
     cur.execute(
         """
         insert into collected_products
@@ -50,7 +54,7 @@ def _fixture(cur, *, stage="judged", barcode="8801037088168", ingredients="밀�
                 '{밀가루,설탕}', %s::verdict_enum, 'v1.1.0', now(), %s, %s)
         returning id
         """,
-        (f"test-{psycopg.__version__}-{stage}-{barcode}", barcode, ingredients,
+        (f"test-{_ctr[0]}-{stage}-{barcode}", barcode, ingredients,
          confidence, verdict, stage, review_decision),
     )
     return cur.fetchone()[0]
@@ -202,11 +206,12 @@ def test_promote_locks_during_review():
         promoter = psycopg.connect(dsn())
         pc = promoter.cursor()
         pc.execute("begin")
-        # promote.py 의 후보 잠금과 동일
-        pc.execute("""select id from collected_products
-                      where id=%s and stage='judged' and review_decision='verified'
-                      for update""", (cid,))
-        check("promote 후보 FOR UPDATE 획득", pc.fetchone() is not None)
+        # promote.py 의 실제 후보 잠금 쿼리를 그대로 실행 (복제 아님 — FOR UPDATE가 빠지면
+        # 잠금이 안 걸려 아래 review 가 대기하지 않으므로 테스트가 깨진다 = 회귀 방지).
+        from promote import CANDIDATE_SELECT
+        pc.execute(CANDIDATE_SELECT)
+        locked_ids = {str(r[0]) for r in pc.fetchall()}
+        check("promote 후보에 fixture 포함(잠금)", str(cid) in locked_ids)
         with psycopg.connect(dsn()) as c2conn, c2conn.cursor() as c2:
             c2.execute("set statement_timeout='800ms'")
             try:
@@ -254,6 +259,36 @@ def test_rollback_shared_master():
         conn.rollback()
 
 
+def test_rollback_shared_barcode():
+    """rollback: verified·non-verified가 같은 barcode를 가리키는 손상 데이터에서
+    verified의 barcode link가 보존되어야 한다 (HIGH 코멘트 케이스)."""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
+             source_checked_at,verified_status)
+            values ('B','N','shared-bc','insufficient','v1',now(),'t',now(),'unverified')
+            returning id""")
+        m = cur.fetchone()[0]
+        # 두 행이 같은 barcode (손상 상태). product_barcodes는 PK라 1행만 존재.
+        vid = _fixture(cur, stage="promoted", barcode=SYN_BC_1, review_decision="verified")
+        nid = _fixture(cur, stage="promoted", barcode=SYN_BC_1, review_decision=None)
+        cur.execute("update collected_products set promoted_master_id=%s where id in (%s,%s)",
+                    (m, vid, nid))
+        cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')",
+                    (SYN_BC_1, m))
+        cur.execute("select public.rollback_ungated_promotions()")
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (SYN_BC_1,))
+        check("공유 barcode: verified link 보존", cur.fetchone()[0] is True)
+        cur.execute("select exists(select 1 from product_masters where id=%s)", (m,))
+        check("공유 barcode: master 보존", cur.fetchone()[0] is True)
+        cur.execute("select stage from collected_products where id=%s", (vid,))
+        check("공유 barcode: verified promoted 유지", cur.fetchone()[0] == "promoted")
+        cur.execute("select stage from collected_products where id=%s", (nid,))
+        check("공유 barcode: non-verified→judged", cur.fetchone()[0] == "judged")
+        conn.rollback()
+
+
 def test_no_clobber():
     """extract upsert: reviewed_at 있는 행은 갱신 제외 (UPSERT_SQL where 절 검증)."""
     from common import UPSERT_SQL
@@ -264,7 +299,8 @@ def test_no_clobber():
 def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
-              test_rollback_scope, test_rollback_shared_master, test_no_clobber]:
+              test_rollback_scope, test_rollback_shared_master,
+              test_rollback_shared_barcode, test_no_clobber]:
         try:
             t()
         except Exception as e:  # noqa

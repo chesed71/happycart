@@ -37,26 +37,44 @@ begin
   set stage = 'judged', promoted_master_id = null, promoted_at = null
   where id in (select id from _rb);
 
-  -- 2) 대상 행이 만든 바코드만 제거 (verified 행/공유 master의 바코드는 보존).
+  -- 2) non-verified 행이 만든 바코드만 제거. 손상 데이터(공유 barcode·링크 불일치) 방어:
+  --    (a) barcode 와 master_id 가 그 행의 주장(promoted_master_id)과 일치할 때만 — 링크가
+  --        어긋난 경우(divergence)는 건드리지 않는다.
+  --    (b) 같은 barcode 를 가리키는 verified promoted 행이 있으면 보존 — verified 의 link 보호.
   delete from public.product_barcodes b
-  where b.barcode in (select barcode from _rb where barcode is not null);
+  using _rb r
+  where b.barcode = r.barcode
+    and b.master_id = r.promoted_master_id
+    and not exists (
+      select 1 from public.collected_products v
+      where v.stage = 'promoted' and v.review_decision = 'verified' and v.barcode = b.barcode
+    );
 
-  -- 3) 바코드가 모두 사라져 빈 master만 제거. verified 와 공유된 master 는 verified
-  --    바코드가 남아 비지 않으므로 보존된다.
+  -- 3) 비게 된 master 중 verified 행이 참조하지 않는 것만 제거.
   delete from public.product_masters m
   where m.id in (select promoted_master_id from _rb where promoted_master_id is not null)
-    and not exists (select 1 from public.product_barcodes b where b.master_id = m.id);
+    and not exists (select 1 from public.product_barcodes b where b.master_id = m.id)
+    and not exists (
+      select 1 from public.collected_products v
+      where v.stage = 'promoted' and v.review_decision = 'verified' and v.promoted_master_id = m.id
+    );
 
   drop table _rb;
 
-  -- 4) 안전 assert: 살아남은 verified promoted 행이 가리키는 master 가 삭제됐으면 중단.
+  -- 4) 안전 assert: 살아남은 verified promoted 행의 master 와 barcode link 가 모두 살아있어야.
+  --    (master 존재뿐 아니라 barcode link 손상까지 잡는다.)
   select count(*) into v_broken
   from public.collected_products c
   where c.stage = 'promoted' and c.review_decision = 'verified'
-    and c.promoted_master_id is not null
-    and not exists (select 1 from public.product_masters m where m.id = c.promoted_master_id);
+    and (
+      (c.promoted_master_id is not null
+        and not exists (select 1 from public.product_masters m where m.id = c.promoted_master_id))
+      or
+      (c.barcode is not null
+        and not exists (select 1 from public.product_barcodes b where b.barcode = c.barcode))
+    );
   if v_broken > 0 then
-    raise exception 'rollback would orphan % verified promotion(s) — aborting', v_broken;
+    raise exception 'rollback would damage % verified promotion(s) (master/barcode) — aborting', v_broken;
   end if;
 end
 $fn$;

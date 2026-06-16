@@ -26,6 +26,26 @@ SOURCE_BY_COLLECTED = {
     "kakamuka": "kakamuka 크롤링",
 }
 
+# 승격 후보 잠금 쿼리. test_invariants.py가 이 상수를 그대로 써서 잠금 회귀를 막는다
+# (promote.py에서 FOR UPDATE가 빠지면 잠금 테스트도 깨지도록).
+CANDIDATE_SELECT = """
+    select id, source, source_ref, brand, name, size, category, barcode,
+           ingredients_raw, ingredients_tokens,
+           bad_ingredients_detected, good_ingredients_detected,
+           verdict_reason_codes, verdict::text, rule_version, computed_at,
+           confidence, raw->>'source_url'
+    from collected_products
+    where stage = 'judged'
+      and barcode is not null
+      and ingredients_raw is not null
+      and coalesce(array_length(ingredients_tokens, 1), 0) > 0
+      and brand is not null and name is not null and size is not null
+      and confidence is distinct from 'low'
+      and review_decision = 'verified'   -- 확인완료 게이트 (§8-1 확정)
+    order by source, source_ref
+    for update   -- 후보 행을 트랜잭션 동안 잠가 review RPC와의 경쟁 차단
+"""
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -35,23 +55,7 @@ def main():
     stats = Counter()
 
     with connect(args.dsn) as conn, conn.cursor() as cur:
-        cur.execute("""
-            select id, source, source_ref, brand, name, size, category, barcode,
-                   ingredients_raw, ingredients_tokens,
-                   bad_ingredients_detected, good_ingredients_detected,
-                   verdict_reason_codes, verdict::text, rule_version, computed_at,
-                   confidence, raw->>'source_url'
-            from collected_products
-            where stage = 'judged'
-              and barcode is not null
-              and ingredients_raw is not null
-              and coalesce(array_length(ingredients_tokens, 1), 0) > 0
-              and brand is not null and name is not null and size is not null
-              and confidence is distinct from 'low'
-              and review_decision = 'verified'   -- 확인완료 게이트 (§8-1 확정)
-            order by source, source_ref
-            for update   -- 후보 행을 트랜잭션 동안 잠가 review RPC와의 경쟁 차단
-        """)
+        cur.execute(CANDIDATE_SELECT)
         rows = cur.fetchall()
         # 승격 보류 사유별 카운트 (judged인데 조건 미달)
         cur.execute("""
