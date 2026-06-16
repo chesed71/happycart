@@ -128,18 +128,42 @@ def main():
                     stats["verified_master_hold"] += len(members)
                     continue
 
+            attached = 0
             for m in members:
                 cur.execute("""
                     insert into product_barcodes (barcode, master_id, size)
                     values (%s, %s, %s)
                     on conflict (barcode) do nothing
+                    returning master_id
                 """, (m[7], master_id, m[5]))
-                promoted_barcodes += cur.rowcount
+                ins = cur.fetchone()
+                if not ins:
+                    # 바코드가 이미 존재 — 어느 master 소속인지 확인
+                    cur.execute("select master_id from product_barcodes where barcode=%s", (m[7],))
+                    owner = cur.fetchone()[0]
+                    if str(owner) != str(master_id):
+                        # 다른 master 의 바코드 — promoted 로 마킹하면 링크가 어긋난다. 보류.
+                        cur.execute("""
+                            update collected_products set stage='conflict',
+                              conflict_reason = 'barcode '||%s||' belongs to different master '||%s
+                            where id = %s
+                        """, (m[7], str(owner), m[0]))
+                        stats["barcode_conflict_held"] += 1
+                        continue
+                    # 같은 master (재실행 멱등) — 정상 진행
+                attached += 1
+                promoted_barcodes += 1 if ins else 0
                 cur.execute("""
                     update collected_products
                     set stage = 'promoted', promoted_master_id = %s, promoted_at = now()
                     where id = %s
                 """, (master_id, m[0]))
+
+            # 이 그룹의 어떤 바코드도 master 에 붙지 못했다면(전부 충돌) 빈 master 정리.
+            if attached == 0 and got:
+                cur.execute("delete from product_masters where id = %s", (master_id,))
+                promoted_masters -= 1
+                stats["empty_master_removed"] += 1
 
         if not args.dry_run:
             conn.commit()

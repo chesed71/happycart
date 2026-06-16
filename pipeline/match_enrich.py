@@ -119,10 +119,15 @@ def main():
         stats["C_service_conflict"] = cur.rowcount
 
         # ── D. 쿠팡 내부 중복 바코드 ────────────────────────────────────────
-        # 재평가를 위해 이전 실행이 자동 표시한 dup conflict 원복 (수동 결정 유지)
+        # 재평가를 위해 이전 실행이 자동 표시한 dup conflict 원복 (수동 결정 유지).
+        # parsed로 되돌릴 때 파생 컬럼도 비운다 (review RPC와 동일 — 재실행 시 judged였던
+        # 행에 stale verdict가 남지 않도록).
         cur.execute("""
             update collected_products
-            set stage = 'parsed', conflict_reason = null
+            set stage = 'parsed', conflict_reason = null,
+                ingredients_tokens = null, verdict = null,
+                bad_ingredients_detected = null, good_ingredients_detected = null,
+                verdict_reason_codes = null, rule_version = null, computed_at = null
             where stage = 'conflict' and conflict_reason like 'duplicate barcode within source%'
         """)
         stats["D_reset_for_reeval"] = cur.rowcount

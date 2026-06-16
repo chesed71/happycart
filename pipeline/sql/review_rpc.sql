@@ -86,8 +86,10 @@ declare
   v_confidence text;
   v_decision text;
 begin
+  -- FOR UPDATE 로 행을 잠가 promote.py 와의 TOCTOU 경쟁을 차단한다.
+  -- 동시 promote 가 이 트랜잭션 커밋까지 대기하므로, 아래 검사·UPDATE 가 원자적이다.
   select stage, confidence into v_stage, v_cur_confidence
-  from public.collected_products where id = p_id;
+  from public.collected_products where id = p_id for update;
   if v_stage is null then
     raise exception 'collected_product % not found', p_id using errcode = 'no_data_found';
   end if;
