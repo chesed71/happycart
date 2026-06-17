@@ -137,26 +137,24 @@ class PgTarget:
 
 
 def classify_dryrun(target, vals, barcodes):
-    """쓰기 없이 master/barcode가 어떻게 처리될지 분류 (운영 읽기만)."""
+    """쓰기 없이 master/barcode가 어떻게 처리될지 분류 (운영 읽기만). RPC와 동일 분류."""
     existing_id, verified = target.plan_master(vals)
     if verified:
-        m_status = "verified_held"
-    elif existing_id is not None:
-        m_status = "updated"
-    else:
-        m_status = "inserted"
-    bc_out = []
+        return {"master_id": existing_id, "master_status": "verified_held", "barcodes": []}
+    m_status = "updated" if existing_id is not None else "inserted"
+    bc_out, attached = [], 0
     for bc in barcodes:
         owner = target.barcode_owner(bc["barcode"])
-        if m_status == "verified_held":
-            s = "held"
-        elif owner is None:
-            s = "inserted"
+        if owner is None:
+            s = "inserted"; attached += 1
         elif existing_id is not None and str(owner) == str(existing_id):
-            s = "exists"
+            s = "exists"; attached += 1
         else:
             s = "conflict"
         bc_out.append({"barcode": bc["barcode"], "status": s})
+    # 신규 master인데 붙을 barcode가 없으면 빈 master → 정리 대상(empty_held)
+    if m_status == "inserted" and attached == 0:
+        return {"master_id": None, "master_status": "empty_held", "barcodes": bc_out}
     return {"master_id": existing_id, "master_status": m_status, "barcodes": bc_out}
 
 
@@ -177,30 +175,31 @@ def main():
         print(f"승격 master {len(masters)} / barcode {sum(len(v) for v in bc_by_master.values())}"
               + (" [DRY-RUN]" if args.dry_run else ""))
 
-        local_to_prod = {}
+        # prod_master_id는 collected_products(행=바코드) 단위로, **실제로 운영에 붙은
+        # 바코드(inserted/exists) 행에만** 기록한다. verified_held / conflict / empty_held
+        # 행은 운영에 올라가지 않았으므로 기록하지 않는다(=미매핑, 수동 처리 대상).
+        # → prod_master_id is null & stage='promoted' = "아직 운영 미반영"으로 조회 가능.
+        attach_map = {}  # barcode -> prod_master_id (붙은 것만)
         for local_id, vals in masters.items():
             barcodes = bc_by_master.get(local_id, [])
-            if args.dry_run:
-                res = classify_dryrun(target, vals, barcodes)
-            else:
-                res = target.upload(vals, barcodes)
+            res = classify_dryrun(target, vals, barcodes) if args.dry_run else target.upload(vals, barcodes)
             stats[f"master_{res['master_status']}"] += 1
+            if res["master_status"] == "verified_held":
+                print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
+            elif res["master_status"] == "empty_held":
+                print(f"  EMPTY-HELD ({vals['brand']} / {vals['name']}) — 바코드 전부 충돌, master 미생성")
             for b in res["barcodes"]:
                 stats[f"barcode_{b['status']}"] += 1
                 if b["status"] == "conflict":
                     print(f"  CONFLICT barcode {b['barcode']} — 운영에서 다른 master 소속, 보류")
-            if res["master_status"] == "verified_held":
-                print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
-                continue  # MEDIUM-1: 보류분은 prod_master_id 기록하지 않는다
-            if not args.dry_run and res.get("master_id"):
-                local_to_prod[local_id] = res["master_id"]
+                elif b["status"] in ("inserted", "exists") and res.get("master_id"):
+                    attach_map[b["barcode"]] = res["master_id"]
 
-        # 실제 업로드분만 운영 id 기록
-        if not args.dry_run and local_to_prod:
+        if not args.dry_run and attach_map:
             with src.cursor() as cur:
-                for local_id, prod_id in local_to_prod.items():
-                    cur.execute("update collected_products set prod_master_id=%s where promoted_master_id=%s",
-                                (prod_id, local_id))
+                for barcode, prod_id in attach_map.items():
+                    cur.execute("update collected_products set prod_master_id=%s where barcode=%s and stage='promoted'",
+                                (prod_id, barcode))
             src.commit()
 
     print(dict(stats))

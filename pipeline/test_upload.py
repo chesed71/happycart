@@ -84,19 +84,41 @@ def test_rpc_verified_held():
         conn.rollback()
 
 
-def test_rpc_barcode_conflict():
+def test_rpc_barcode_conflict_empty_held():
+    """신규 master인데 유일 바코드가 충돌 → 빈 master 정리(empty_held), 미생성."""
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # master A + barcode B1
         a = _master(brand="UPLOADTEST_A", ing="i-a")
         _call(cur, a, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
-        # master B가 같은 barcode B1을 요청 → conflict (재연결 안 함)
         b = _master(brand="UPLOADTEST_B", ing="i-b")
         r = _call(cur, b, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
-        check("RPC barcode conflict 분류", r["barcodes"][0]["status"] == "conflict", r["barcodes"])
+        check("conflict 단독 → empty_held", r["master_status"] == "empty_held", r["master_status"])
+        check("empty_held: master_id 없음", r["master_id"] is None)
+        check("empty_held: barcode conflict", r["barcodes"][0]["status"] == "conflict")
+        cur.execute("select exists(select 1 from product_masters where ingredients_hash=md5('UPLOADTEST_B'||'|'||'i-b'))")
+        check("empty_held: 빈 master 정리됨", cur.fetchone()[0] is False)
         cur.execute("select master_id from product_barcodes where barcode=%s", (B1,))
-        owner = cur.fetchone()[0]
-        check("RPC conflict: 원소속 유지", str(owner) != str(r["master_id"]))
+        check("conflict: 원소속(A) 유지", cur.fetchone() is not None)
+        conn.rollback()
+
+
+def test_rpc_mixed_barcode():
+    """신규 master + 바코드 2개(하나 충돌, 하나 신규) → master 유지, attached 1."""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        a = _master(brand="UPLOADTEST_A2", ing="i-a2")
+        _call(cur, a, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+        b = _master(brand="UPLOADTEST_B2", ing="i-b2")
+        r = _call(cur, b, [
+            {"barcode": B1, "size": "1", "image_url": None, "image_source_url": None},  # 충돌
+            {"barcode": B2, "size": "1", "image_url": None, "image_source_url": None},  # 신규
+        ])
+        check("mixed: master inserted 유지", r["master_status"] == "inserted", r["master_status"])
+        sm = {x["barcode"]: x["status"] for x in r["barcodes"]}
+        check("mixed: B1 conflict", sm[B1] == "conflict")
+        check("mixed: B2 inserted", sm[B2] == "inserted")
+        cur.execute("select master_id from product_barcodes where barcode=%s", (B2,))
+        check("mixed: B2가 새 master에 연결", str(cur.fetchone()[0]) == str(r["master_id"]))
         conn.rollback()
 
 
@@ -130,11 +152,15 @@ def test_dryrun_classify():
     bcmap3 = {b["barcode"]: b["status"] for b in r3["barcodes"]}
     check("dry-run 동일소속 barcode=exists", bcmap3[B1] == "exists")
     check("dry-run 미존재 barcode=inserted", bcmap3[B2] == "inserted")
+    # 신규 master인데 모든 barcode가 타소속 → empty_held
+    r4 = classify_dryrun(_StubTarget(None, False, {B1: "o", B2: "o"}), vals, bcs)
+    check("dry-run 전부충돌 신규=empty_held", r4["master_status"] == "empty_held")
+    check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
 
 
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
-              test_rpc_barcode_conflict, test_dryrun_classify]:
+              test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode, test_dryrun_classify]:
         try:
             t()
         except Exception as e:  # noqa
