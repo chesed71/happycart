@@ -124,7 +124,7 @@
 
 | 환경 | 스키마(0014 verdict / 0015 분리) | 파이프라인 | Data Desk 직결 |
 |------|--------------------------------|-----------|----------------|
-| 로컬 Docker (`happycart`) | ⚠️ 분리는 적용했으나 **아직 3-verdict** — main(2-verdict)에 재동기화 필요 | ✅ (실측 6,223행) | ✅ |
+| 로컬 Docker (`happycart`) | ✅ 2-verdict + 0015 분리 (main 동기화 완료) | ✅ (실측 6,223행) | ✅ |
 | **운영 Supabase** | ❌ 구 `products` 단일 스키마 | — | `/pending` 탭만 운영 연결 |
 
 - 로컬은 시드 8건이 운영 베이스라인. 승격은 검수 게이트로 검수 전까지 0 (현재 masters=8).
@@ -150,6 +150,6 @@
 
 ## 다음 작업
 
-- **로컬 재동기화**: main을 pull해 2-verdict(insufficient 제거)·재번호된 0014/0015로 로컬 Docker DB·파이프라인을 맞춘다 (현재 로컬은 3-verdict 기준이라 main과 어긋남).
+- ✅ **로컬 재동기화 완료** (2026-06-17): 2-verdict·0014/0015 재번호로 bootstrap·judge·review 롤 정정, 재구성→파이프라인→테스트 32/32 통과.
 - ⑤ **Phase 3 (운영 배포)**: `supabase db push`(0014 2-verdict + 0015 분리) + `upload_prod.py` 작성 + 이미지 업로드 + pending 소급 (운영 반영 계획은 적재 계획 §6). ※ "Data Desk 등록 로직 전환"은 불필요 — pending은 status 전이만 하므로 분리 무관.
 - 물량 확대: Koreannet 바코드 보강(6개 카테고리 미진행)·라벨 판독 — 보강 즉시 collected_products에서 승격 가능.
