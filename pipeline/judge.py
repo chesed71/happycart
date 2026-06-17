@@ -32,7 +32,8 @@ def run_rules(items: list[dict]) -> list[dict]:
 
 
 def current_rule_version() -> str:
-    return run_rules([{"ref": "_probe", "tokens": []}])[0]["rule_version"]
+    # 2-verdict 이후 빈 토큰은 룰 엔진이 거절하므로 더미 토큰으로 rule_version만 얻는다.
+    return run_rules([{"ref": "_probe", "tokens": ["물"]}])[0]["rule_version"]
 
 
 def judge_collected(conn, rule_version: str, stats: Counter) -> None:
