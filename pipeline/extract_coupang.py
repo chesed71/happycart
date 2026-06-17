@@ -120,6 +120,10 @@ def main():
             barcode = p.get("barcode")
             if barcode is not None:
                 barcode = str(barcode)
+                # UPC-A(12자리)는 앞에 0을 붙이면 동일 체크digit의 EAN-13(GTIN-13)이 된다.
+                if len(barcode) == 12 and barcode.isdigit():
+                    barcode = "0" + barcode
+                    stats["barcode_upca_normalized"] += 1
                 if not ean_valid(barcode):
                     stats["barcode_invalid"] += 1
                     barcode = None  # 검역 — 원값은 raw에 보존
