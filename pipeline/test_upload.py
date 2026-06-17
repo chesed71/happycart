@@ -14,7 +14,7 @@ import sys
 import psycopg
 
 from common import dsn
-from upload_prod import classify_dryrun
+from upload_prod import classify_dryrun, writeback_attachments
 
 results = []
 
@@ -158,9 +158,42 @@ def test_dryrun_classify():
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
 
 
+def test_writeback_row_scoped():
+    """회귀 잠금: 같은 barcode를 가진 promoted 행 2개에서, writeback이 대상 행(id)만
+    갱신하고 다른 행은 NULL 유지. (barcode 기준이면 둘 다 찍혀 실패 → 그 버그를 잠근다)"""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+            values ('WB','A','ia','okay','v1',now(),'t',now(),'unverified'),
+                   ('WB','B','ib','okay','v1',now(),'t',now(),'unverified') returning id""")
+        ma = cur.fetchone()[0]
+        cur.execute("select id from product_masters where ingredients_raw='ib'"); mb = cur.fetchone()[0]
+        cur.execute("select id from product_masters where ingredients_raw='ia'"); ma = cur.fetchone()[0]
+        # 같은 barcode B1을 가진 promoted 행 2개 (서로 다른 promoted_master_id)
+        cur.execute("""insert into collected_products
+            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
+            values ('coupang','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s)
+            returning id""", (B1, ma))
+        row_a = cur.fetchone()[0]
+        cur.execute("""insert into collected_products
+            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
+            values ('coupang','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s)
+            returning id""", (B1, mb))
+        row_b = cur.fetchone()[0]
+        # row_a만 붙은 것으로 writeback
+        writeback_attachments(cur, [("11111111-1111-1111-1111-111111111111", row_a, ma)])
+        cur.execute("select prod_master_id from collected_products where id=%s", (row_a,))
+        check("writeback: 대상 행(id) 기록", str(cur.fetchone()[0]) == "11111111-1111-1111-1111-111111111111")
+        cur.execute("select prod_master_id from collected_products where id=%s", (row_b,))
+        check("writeback: 같은 barcode 다른 행은 NULL 유지", cur.fetchone()[0] is None)
+        conn.rollback()
+
+
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
-              test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode, test_dryrun_classify]:
+              test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
+              test_writeback_row_scoped, test_dryrun_classify]:
         try:
             t()
         except Exception as e:  # noqa

@@ -141,6 +141,16 @@ class PgTarget:
         return res
 
 
+def writeback_attachments(cur, attach_rows):
+    """붙은 행(id)에만 prod_master_id 기록. barcode가 아니라 행 식별자(id) 기준이라,
+    같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
+    attach_rows: [(prod_master_id, collected_id, local_master_id), ...]"""
+    for prod_id, cid, local_id in attach_rows:
+        cur.execute("""update collected_products set prod_master_id=%s
+                       where id=%s and promoted_master_id=%s and stage='promoted'""",
+                    (prod_id, cid, local_id))
+
+
 def classify_dryrun(target, vals, barcodes):
     """쓰기 없이 master/barcode가 어떻게 처리될지 분류 (운영 읽기만). RPC와 동일 분류."""
     existing_id, verified = target.plan_master(vals)
@@ -210,10 +220,7 @@ def main():
         # 기준이라, 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
         if not args.dry_run and attach_rows:
             with src.cursor() as cur:
-                for prod_id, cid, local_id in attach_rows:
-                    cur.execute("""update collected_products set prod_master_id=%s
-                                   where id=%s and promoted_master_id=%s and stage='promoted'""",
-                                (prod_id, cid, local_id))
+                writeback_attachments(cur, attach_rows)
             src.commit()
 
     print(dict(stats))
