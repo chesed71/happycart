@@ -1,2 +1,4 @@
 # 재현성을 위해 테스트한 버전으로 핀 (2026-06 검증). 갱신 시 test_invariants.py 재실행.
 psycopg[binary]==3.2.13
+# prepare_images.py 의 JPEG 변환용.
+Pillow==11.3.0

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Phase 2 파이프라인 전체 실행 (멱등). bootstrap_local.sh로 DB를 만든 뒤 호출한다.
-#   extract → match_enrich → tokenize → judge → promote
+#   extract → match_enrich → tokenize → judge → promote → prepare_images
 #
 # 최초 1회 셋업 (psycopg 설치):
 #   python3 -m venv pipeline/.venv
@@ -23,3 +23,4 @@ fi
 "$PY" "$DIR/tokenize_ingredients.py"
 "$PY" "$DIR/judge.py"
 "$PY" "$DIR/promote.py"
+"$PY" "$DIR/prepare_images.py"
