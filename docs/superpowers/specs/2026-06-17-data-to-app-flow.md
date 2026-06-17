@@ -1,6 +1,6 @@
 # 데이터 수집 → HappyCart 앱 — 전체 흐름
 
-> **목적**: 크롤링 데이터 수집부터 사용자 앱 노출까지의 end-to-end 파이프라인을 한 장으로 본다. 각 단계의 적용 상태(로컬 ✅ / 운영 ❌)와 담당 컴포넌트를 정리한다.
+> **목적**: 크롤링 데이터 수집부터 사용자 앱 노출까지의 end-to-end 파이프라인을 한 장으로 본다. 각 단계의 적용 상태(로컬/운영, main 반영 여부)와 담당 컴포넌트를 정리한다.
 
 - 작성일: 2026-06-17 (2026-06-17 정정: 2-verdict·마이그레이션 재번호·PR 머지 반영)
 - 관련 스펙: `2026-06-11-products-table-split-plan.md`(products 분리), `2026-06-11-local-db-data-ingestion-plan.md`(적재 파이프라인), `2026-06-16-datadesk-collected-products-plan.md`(Data Desk 직결)
@@ -49,7 +49,7 @@
                         │ promote.py  [게이트] barcode+원재료+판정+verified
                         ▼
 ═══════════════════════════════════════════════════════════════════════════════
- ④ 서비스 테이블 (로컬)                                        [✅ 로컬 / ❌ 운영]
+ ④ 서비스 테이블 — 로컬 승격 산출                              [✅ 로컬 파이프라인 출력]
 ═══════════════════════════════════════════════════════════════════════════════
         ┌──────────────────┐ 1     N ┌───────────────────┐
         │ product_masters  │◀────────│ product_barcodes  │
@@ -60,10 +60,10 @@
           Data Desk 검증 → verified_status='verified'  (앱 노출 승인)
                         │
 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ⑤ 운영 반영 — Phase 3                                    [✅ 스키마 완료 / 업로드 도구 준비]
+ ⑤ 운영 반영 — Phase 3                              [✅ 스키마 완료 / 업로드 도구 PR #8]
 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
                         │ ① supabase db push (0014 2-verdict + 0015 분리)  ✅ 적용됨
-                        │ ② upload_prod.py (승격분만 upsert, REST/postgres)  ✅ 작성·검증
+                        │ ② upload_prod.py (승격분만 upsert, REST/postgres)  PR #8 (main 미반영)
                         │ ③ 이미지 업로드 → image_url                       (예정)
                         │   (Data Desk 등록 로직 수정 불필요 — pending status 전이만 함)
                         ▼
@@ -97,7 +97,7 @@
 | ② | 로컬 파이프라인 | extract→match→tokenize→judge | `collected_products` (stage 진행) |
 | ③ | Data Desk 검수 | 원재료·바코드 판독 + 확인완료 | `review_decision='verified'` |
 | ④ | 승격 | barcode+원재료+판정+verified 게이트 | `product_masters`/`product_barcodes` (unverified) |
-| ⑤ | 운영 반영 (Phase 3) | db push ✅ + 승격분 업로드(도구 준비) | 운영 서비스 테이블 |
+| ⑤ | 운영 반영 (Phase 3) | db push ✅ + 승격분 업로드(도구 PR #8, main 미반영) | 운영 서비스 테이블 |
 | ⑥ | 운영 Supabase | lookup_product / pending (분리 적용됨) | 앱이 조회하는 DB |
 | ⑦ | HappyCart 앱 | 바코드 스캔 → 판정 표시 | 사용자 노출 |
 
@@ -120,7 +120,7 @@
 - HappyCart: PR #2 `feature/collected-products-pipeline` **머지**. 이후 main에서 insufficient 제거(2-verdict)·마이그레이션 0014/0015 재번호가 추가됨.
 - Data Desk: 원본 PR #1은 closed, 변경은 `fix/datadesk-security-hardening` PR로 **머지**(+ localStorage quota 안전처리 등 하드닝).
 
-**배포(운영 Supabase)**: 스키마 분리 ✅ 적용됨 (2026-06-17 REST로 확인). 데이터 업로드는 도구 준비 완료.
+**배포(운영 Supabase)**: 스키마 분리 ✅ 적용됨 (2026-06-17 REST로 확인). 데이터 업로드 도구(`upload_prod.py`)는 PR #8, main 미반영.
 
 | 환경 | 스키마(0014 verdict / 0015 분리) | 파이프라인 | Data Desk 직결 |
 |------|--------------------------------|-----------|----------------|
@@ -129,7 +129,7 @@
 
 - **운영은 이미 분리 완료** — products 51(frozen) → masters 50 / barcodes 51. 앱은 새 스키마로 정상 동작 중(lookup_product 13컬럼 그대로).
 - **"시드 8 = 운영 베이스라인"은 틀림** — 운영엔 별도로 키워온 카탈로그 50/51이 있다. 로컬(시드 8)은 운영의 부분집합이 아니라 **크롤 기반 신규 상품 공급원**. 기존 50건은 ingredients_hash 가드로 보호된다.
-- `upload_prod.py`는 REST(service_role 키)·postgres 두 백엔드. dry-run으로 운영 읽기·verified 가드 검증 완료(쓰기 0). **실제 업로드는 로컬 승격분이 생길 때**(현재 0건).
+- `upload_prod.py`(REST(service_role 키)·postgres 두 백엔드 + 0016 RPC)는 **PR #8**에서 작성·검증(dry-run으로 운영 읽기·verified 가드, 쓰기 0). **아직 main 미반영** — 머지 후 사용 가능. **실제 업로드는 로컬 승격분이 생길 때**(현재 0건).
 - **Data Desk 등록 로직**: pending 탭은 `pending_products` status 전이만 — 분리 무관, 고칠 것 없음.
 - 안전·동시성 보강은 `pipeline/test_invariants.py` 32종으로 회귀 방지 (RPC 잠금·promote 경쟁·rollback 손상 데이터·최소권한 등).
 
@@ -152,7 +152,8 @@
 ## 다음 작업
 
 - ✅ **로컬 재동기화 완료** (2026-06-17): 2-verdict·0014/0015 재번호로 bootstrap·judge·review 롤 정정, 32/32 통과.
-- ✅ **운영 스키마 분리 적용됨**, `upload_prod.py`(REST/postgres) 작성·검증 완료.
+- ✅ **운영 스키마 분리 적용됨** (운영 Supabase에 masters/barcodes 존재).
+- `upload_prod.py`는 **PR #8에서 작성·검증, main 미반영** — 머지 후 사용 가능. 운영 RPC 0016도 운영 대시보드에서 1회 실행 필요.
 - **실제 업로드 대기**: 로컬 검수·승격분이 생기면 `upload_prod.py --dry-run` → 실행. 쓰려면 `pipeline/.env`에 `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` 필요.
 - (예정) 이미지 업로드 → image_url, pending 소급.
 - 물량 확대: Koreannet 바코드 보강(6개 카테고리 미진행)·라벨 판독 — 보강 즉시 collected_products에서 승격 가능.
