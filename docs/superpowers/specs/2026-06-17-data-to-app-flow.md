@@ -60,17 +60,17 @@
           Data Desk 검증 → verified_status='verified'  (앱 노출 승인)
                         │
 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
- ⑤ 운영 반영 — Phase 3                                         [❌ 미실행]
+ ⑤ 운영 반영 — Phase 3                                    [✅ 스키마 완료 / 업로드 도구 준비]
 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-                        │ ① supabase db push (0014 2-verdict + 0015 분리)
-                        │ ② upload_prod.py (승격분만 service_role upsert) ※미작성
-                        │ ③ 이미지 업로드 → image_url
+                        │ ① supabase db push (0014 2-verdict + 0015 분리)  ✅ 적용됨
+                        │ ② upload_prod.py (승격분만 upsert, REST/postgres)  ✅ 작성·검증
+                        │ ③ 이미지 업로드 → image_url                       (예정)
                         │   (Data Desk 등록 로직 수정 불필요 — pending status 전이만 함)
                         ▼
 ═══════════════════════════════════════════════════════════════════════════════
- ⑥ 운영 Supabase (ftgsnvvskbadegswvjnp)              [❌ 아직 구 products 스키마]
+ ⑥ 운영 Supabase (ftgsnvvskbadegswvjnp)              [✅ 분리 적용됨 — masters 50/barcodes 51]
 ═══════════════════════════════════════════════════════════════════════════════
-        product_masters / product_barcodes   ← 승격·verified 분만
+        product_masters / product_barcodes   ← 이미 운영 카탈로그(50/51, verified)
         Storage (product-images)
         pending_products  ◀────────────────────────────┐
                         │ lookup_product() RPC (anon)   │ log_pending_product()
@@ -84,7 +84,7 @@
             ▼
         사용자: okay / not_okay 판정 확인 (2단계)
 
-  범례:  ✅ 적용됨(로컬)   ❌ 미적용(운영, Phase 3 대기)   ┄┄ 아직 안 건넌 경계
+  범례:  ✅ 적용됨   (예정) 미작업   ┄┄ 로컬↔운영 경계
 ```
 
 ---
@@ -97,8 +97,8 @@
 | ② | 로컬 파이프라인 | extract→match→tokenize→judge | `collected_products` (stage 진행) |
 | ③ | Data Desk 검수 | 원재료·바코드 판독 + 확인완료 | `review_decision='verified'` |
 | ④ | 승격 | barcode+원재료+판정+verified 게이트 | `product_masters`/`product_barcodes` (unverified) |
-| ⑤ | 운영 반영 (Phase 3) | db push + 승격분 업로드 | 운영 서비스 테이블 |
-| ⑥ | 운영 Supabase | lookup_product / pending | 앱이 조회하는 DB |
+| ⑤ | 운영 반영 (Phase 3) | db push ✅ + 승격분 업로드(도구 준비) | 운영 서비스 테이블 |
+| ⑥ | 운영 Supabase | lookup_product / pending (분리 적용됨) | 앱이 조회하는 DB |
 | ⑦ | HappyCart 앱 | 바코드 스캔 → 판정 표시 | 사용자 노출 |
 
 ### 두 개의 사람 게이트
@@ -120,16 +120,17 @@
 - HappyCart: PR #2 `feature/collected-products-pipeline` **머지**. 이후 main에서 insufficient 제거(2-verdict)·마이그레이션 0014/0015 재번호가 추가됨.
 - Data Desk: 원본 PR #1은 closed, 변경은 `fix/datadesk-security-hardening` PR로 **머지**(+ localStorage quota 안전처리 등 하드닝).
 
-**배포(운영 Supabase)**: 미실행.
+**배포(운영 Supabase)**: 스키마 분리 ✅ 적용됨 (2026-06-17 REST로 확인). 데이터 업로드는 도구 준비 완료.
 
 | 환경 | 스키마(0014 verdict / 0015 분리) | 파이프라인 | Data Desk 직결 |
 |------|--------------------------------|-----------|----------------|
 | 로컬 Docker (`happycart`) | ✅ 2-verdict + 0015 분리 (main 동기화 완료) | ✅ (실측 6,223행) | ✅ |
-| **운영 Supabase** | ❌ 구 `products` 단일 스키마 | — | `/pending` 탭만 운영 연결 |
+| **운영 Supabase** | ✅ **분리 적용됨** — masters 50 / barcodes 51, 전부 verified, lookup_product 정상 | — | `/pending` 탭만 운영 연결 |
 
-- 로컬은 시드 8건이 운영 베이스라인. 승격은 검수 게이트로 검수 전까지 0 (현재 masters=8).
-- 운영 반영(⑤⑥)은 **Phase 3 미실행** — `supabase db push`(0014+0015)도, `upload_prod.py`(미작성)도 아직. 운영 Flutter 앱은 구 스키마로 정상 동작 중.
-- **Data Desk 등록 로직**: pending 탭은 `pending_products` status 전이(registered/ignored)만 한다 — products/masters/barcodes에 insert하지 않으므로 분리와 무관. 실제 상품 등록은 파이프라인(promote→upload_prod)이 담당. **고칠 것 없음**.
+- **운영은 이미 분리 완료** — products 51(frozen) → masters 50 / barcodes 51. 앱은 새 스키마로 정상 동작 중(lookup_product 13컬럼 그대로).
+- **"시드 8 = 운영 베이스라인"은 틀림** — 운영엔 별도로 키워온 카탈로그 50/51이 있다. 로컬(시드 8)은 운영의 부분집합이 아니라 **크롤 기반 신규 상품 공급원**. 기존 50건은 ingredients_hash 가드로 보호된다.
+- `upload_prod.py`는 REST(service_role 키)·postgres 두 백엔드. dry-run으로 운영 읽기·verified 가드 검증 완료(쓰기 0). **실제 업로드는 로컬 승격분이 생길 때**(현재 0건).
+- **Data Desk 등록 로직**: pending 탭은 `pending_products` status 전이만 — 분리 무관, 고칠 것 없음.
 - 안전·동시성 보강은 `pipeline/test_invariants.py` 32종으로 회귀 방지 (RPC 잠금·promote 경쟁·rollback 손상 데이터·최소권한 등).
 
 ---
@@ -150,6 +151,8 @@
 
 ## 다음 작업
 
-- ✅ **로컬 재동기화 완료** (2026-06-17): 2-verdict·0014/0015 재번호로 bootstrap·judge·review 롤 정정, 재구성→파이프라인→테스트 32/32 통과.
-- ⑤ **Phase 3 (운영 배포)**: `supabase db push`(0014 2-verdict + 0015 분리) + `upload_prod.py` 작성 + 이미지 업로드 + pending 소급 (운영 반영 계획은 적재 계획 §6). ※ "Data Desk 등록 로직 전환"은 불필요 — pending은 status 전이만 하므로 분리 무관.
+- ✅ **로컬 재동기화 완료** (2026-06-17): 2-verdict·0014/0015 재번호로 bootstrap·judge·review 롤 정정, 32/32 통과.
+- ✅ **운영 스키마 분리 적용됨**, `upload_prod.py`(REST/postgres) 작성·검증 완료.
+- **실제 업로드 대기**: 로컬 검수·승격분이 생기면 `upload_prod.py --dry-run` → 실행. 쓰려면 `pipeline/.env`에 `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` 필요.
+- (예정) 이미지 업로드 → image_url, pending 소급.
 - 물량 확대: Koreannet 바코드 보강(6개 카테고리 미진행)·라벨 판독 — 보강 즉시 collected_products에서 승격 가능.
