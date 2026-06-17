@@ -142,10 +142,10 @@ def test_dryrun_classify():
     bcmap = {b["barcode"]: b["status"] for b in r["barcodes"]}
     check("dry-run 신규 barcode=inserted", bcmap[B1] == "inserted")
     check("dry-run 타소속 barcode=conflict", bcmap[B2] == "conflict")
-    # 기존 verified master → held, barcode held
+    # 기존 verified master → held. 계약: barcodes는 빈 배열 (RPC와 동일)
     r2 = classify_dryrun(_StubTarget("mid", True, {B1: "mid"}), vals, bcs)
     check("dry-run verified=held", r2["master_status"] == "verified_held")
-    check("dry-run verified barcode=held", all(b["status"] == "held" for b in r2["barcodes"]))
+    check("dry-run verified: barcodes 빈 배열", r2["barcodes"] == [], r2["barcodes"])
     # 기존 unverified master, B1이 그 master 소속 → updated, exists
     r3 = classify_dryrun(_StubTarget("mid", False, {B1: "mid"}), vals, bcs)
     check("dry-run 기존 unverified=updated", r3["master_status"] == "updated")

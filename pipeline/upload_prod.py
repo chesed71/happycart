@@ -58,16 +58,21 @@ def fetch_promoted(src):
             where c.stage = 'promoted'
         """)
         masters = {r[0]: dict(zip(MASTER_COLS, (_jsonable(x) for x in r[1:]))) for r in cur.fetchall()}
+        # collected row 식별자(id)를 함께 들고 온다 — writeback을 행 단위로 좁히기 위해.
+        # barcode가 collected_products에서 유니크하지 않으므로 (b.master_id =
+        # c.promoted_master_id)까지 묶어 그 행의 바코드만 매칭한다.
         cur.execute("""
-            select c.promoted_master_id, c.barcode, b.size, b.image_url, b.image_source_url
+            select c.promoted_master_id, c.id, c.barcode, b.size, b.image_url, b.image_source_url
             from collected_products c
-            join product_barcodes b on b.barcode = c.barcode
+            join product_barcodes b
+              on b.barcode = c.barcode and b.master_id = c.promoted_master_id
             where c.stage = 'promoted'
         """)
         bc_by_master: dict = {}
-        for mid, barcode, size, iu, isu in cur.fetchall():
+        for mid, cid, barcode, size, iu, isu in cur.fetchall():
             bc_by_master.setdefault(mid, []).append(
-                {"barcode": barcode, "size": size, "image_url": iu, "image_source_url": isu})
+                {"collected_id": cid, "barcode": barcode, "size": size,
+                 "image_url": iu, "image_source_url": isu})
     return masters, bc_by_master
 
 
@@ -179,10 +184,15 @@ def main():
         # 바코드(inserted/exists) 행에만** 기록한다. verified_held / conflict / empty_held
         # 행은 운영에 올라가지 않았으므로 기록하지 않는다(=미매핑, 수동 처리 대상).
         # → prod_master_id is null & stage='promoted' = "아직 운영 미반영"으로 조회 가능.
-        attach_map = {}  # barcode -> prod_master_id (붙은 것만)
+        attach_rows = []  # (prod_master_id, collected_id, local_master_id) — 붙은 행만
         for local_id, vals in masters.items():
-            barcodes = bc_by_master.get(local_id, [])
-            res = classify_dryrun(target, vals, barcodes) if args.dry_run else target.upload(vals, barcodes)
+            entries = bc_by_master.get(local_id, [])
+            payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
+                       for e in entries]
+            bc_to_cids = {}
+            for e in entries:
+                bc_to_cids.setdefault(e["barcode"], []).append(e["collected_id"])
+            res = classify_dryrun(target, vals, payload) if args.dry_run else target.upload(vals, payload)
             stats[f"master_{res['master_status']}"] += 1
             if res["master_status"] == "verified_held":
                 print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
@@ -193,13 +203,17 @@ def main():
                 if b["status"] == "conflict":
                     print(f"  CONFLICT barcode {b['barcode']} — 운영에서 다른 master 소속, 보류")
                 elif b["status"] in ("inserted", "exists") and res.get("master_id"):
-                    attach_map[b["barcode"]] = res["master_id"]
+                    for cid in bc_to_cids.get(b["barcode"], []):
+                        attach_rows.append((res["master_id"], cid, local_id))
 
-        if not args.dry_run and attach_map:
+        # prod_master_id는 **붙은 그 행(id)** 에만 기록. barcode 기준이 아니라 행 식별자
+        # 기준이라, 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
+        if not args.dry_run and attach_rows:
             with src.cursor() as cur:
-                for barcode, prod_id in attach_map.items():
-                    cur.execute("update collected_products set prod_master_id=%s where barcode=%s and stage='promoted'",
-                                (prod_id, barcode))
+                for prod_id, cid, local_id in attach_rows:
+                    cur.execute("""update collected_products set prod_master_id=%s
+                                   where id=%s and promoted_master_id=%s and stage='promoted'""",
+                                (prod_id, cid, local_id))
             src.commit()
 
     print(dict(stats))
