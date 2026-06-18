@@ -152,6 +152,8 @@ begin
   end if;
 end
 $$;
+-- 롤은 cluster-global이라 DB drop 후에도 남는다 → 기존 롤이어도 login·password를 보장.
+alter role datadesk_review with login password 'datadesk_review';
 
 grant usage on schema public to datadesk_review;
 grant select on public.collected_products to datadesk_review;

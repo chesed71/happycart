@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 로컬 DB를 처음부터 재구성한다. 적용 순서 의존성을 한 곳에 캡슐화:
-#   compat → 마이그레이션(시드 포함, 0011 storage만 제외) → [선택 dump] → 0014 → collected_products
+#   compat → 마이그레이션(시드 포함, 0011 storage·0015 split 제외) → [선택 dump] → 0015 split → collected_products
 #
 # 운영 products 베이스라인은 시드 마이그레이션(0005~0009)이 그대로 재현한다 —
 # Data Desk가 직접 등록한 상품이 없음을 확인했으므로 dump 불필요 (2026-06-16).
@@ -28,12 +28,14 @@ echo "==> recreate database $DB"
 docker exec "$CONTAINER" psql -U "$PG_USER" -q \
   -c "drop database if exists $DB;" -c "create database $DB;"
 
-echo "==> compat + migrations (seeds included, skip 0011 storage + 0014 split)"
+echo "==> compat + migrations (seeds included, skip 0011 storage + 0015 split)"
 psql_db < "$REPO_ROOT/supabase/local/00_compat.sql"
 for f in "$REPO_ROOT"/supabase/migrations/*.sql; do
   base="$(basename "$f")"
-  # 0011: storage 스키마 없음 (단독 postgres). 0014: 아래에서 별도 적용.
-  if [[ "$base" =~ ^(0011|0014)_ ]]; then
+  # 0011: storage 스키마 없음 (단독 postgres). 0015 split·0016 upload RPC: 아래에서
+  # 별도 적용 (0016이 0015의 product_masters에 의존하므로 0015 이후여야 한다).
+  # 0014(insufficient 제거)는 products 스키마 변경이라 이 루프에서 정상 적용된다.
+  if [[ "$base" =~ ^(0011|0015|0016)_ ]]; then
     continue
   fi
   echo "    $base"
@@ -45,14 +47,20 @@ if [[ -n "$DUMP_FILE" ]]; then
   psql_db < "$DUMP_FILE"
 fi
 
-echo "==> 0014 split"
-psql_db < "$REPO_ROOT"/supabase/migrations/0014_*.sql
+echo "==> 0015 split"
+psql_db < "$REPO_ROOT"/supabase/migrations/0015_*.sql
+
+echo "==> 0016 upload_promoted_product RPC"
+psql_db < "$REPO_ROOT"/supabase/migrations/0016_*.sql
 
 echo "==> collected_products (local-only)"
 psql_db < "$REPO_ROOT/pipeline/sql/collected_products.sql"
 
 echo "==> review RPC + datadesk_review role (local-only)"
 psql_db < "$REPO_ROOT/pipeline/sql/review_rpc.sql"
+
+echo "==> rollback function (local-only, no-op on fresh DB)"
+psql_db < "$REPO_ROOT/pipeline/sql/rollback_ungated_promotions.sql"
 
 echo "==> summary"
 docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -c \
