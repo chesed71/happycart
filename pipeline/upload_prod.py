@@ -6,6 +6,12 @@
   - verified 가드를 변경문에 박아 read-then-write 경쟁 제거
   - 따라서 클라이언트는 직접 INSERT/PATCH 하지 않는다 (HIGH 1·2 대응)
 
+이미지: image_url 이 비어있는 승격 바코드는 prepare_images.py 가 정리한
+JPEG(work/images/products/<barcode>.jpg + manifest)를 운영 Storage(product-images)에
+올리고 그 공개 URL 을 image_url 로 채워 RPC payload 에 실어 보낸다. 성공분은 로컬
+product_barcodes.image_url 에도 되써 재실행 시 재업로드를 피한다. (Storage 업로드는
+SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY 필요 — 없으면 image 단계만 건너뛴다.)
+
 백엔드 2종 (둘 다 같은 RPC 호출):
   - REST (기본): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (DB 비번 불필요)
   - postgres: --target-dsn (운영 DB 연결문자열)
@@ -141,6 +147,81 @@ class PgTarget:
         return res
 
 
+# ── Storage 이미지 업로드 ─────────────────────────────────────────────────────
+# prepare_images.py 가 정리한 JPEG(work/images/products/<barcode>.jpg)와 manifest 를
+# 입력으로, image_url 이 비어있는 승격 바코드만 운영 Storage 에 올리고 공개 URL 을
+# image_url 에 채운다. (plan §6.4 ③ — 이미지 업로드 + image_url 갱신)
+STORAGE_BUCKET = "product-images"
+IMAGE_MANIFEST = os.path.join(os.path.dirname(__file__), "work", "images", "manifest.json")
+
+
+def load_image_manifest() -> dict:
+    """prepare_images.py 산출 manifest → {barcode: entry}. 없으면 빈 dict."""
+    if not os.path.exists(IMAGE_MANIFEST):
+        return {}
+    with open(IMAGE_MANIFEST, encoding="utf-8") as f:
+        return {e["barcode"]: e for e in json.load(f)}
+
+
+class StorageUploader:
+    """RestTarget 과 같은 자격증명(SUPABASE_URL + SERVICE_ROLE_KEY)을 urllib 로 써서
+    Storage 에 JPEG 를 업로드하고 공개 URL 을 돌려준다. x-upsert 로 재실행 멱등."""
+
+    def __init__(self):
+        self.url = os.environ.get("SUPABASE_URL", "").strip('"').rstrip("/")
+        self.key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip('"')
+        self.enabled = bool(self.url and self.key)
+
+    def public_url(self, storage_target: str) -> str:
+        return f"{self.url}/storage/v1/object/public/{STORAGE_BUCKET}/{storage_target}"
+
+    def upload(self, local_path: str, storage_target: str) -> str:
+        with open(local_path, "rb") as fh:
+            data = fh.read()
+        req = urllib.request.Request(
+            f"{self.url}/storage/v1/object/{STORAGE_BUCKET}/{storage_target}",
+            method="POST", data=data)
+        req.add_header("apikey", self.key)
+        req.add_header("Authorization", f"Bearer {self.key}")
+        req.add_header("Content-Type", "image/jpeg")
+        req.add_header("x-upsert", "true")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"storage {storage_target} → {e.code} {e.read().decode()[:200]}")
+        return self.public_url(storage_target)
+
+
+def enrich_images(entries, manifest, uploader, stats, dry_run):
+    """image_url 이 비고 정리된 JPEG 가 있으면 Storage 에 올려 image_url 을 채운다 (entries 변형).
+    반환: 로컬 product_barcodes 에 되쓸 [(barcode, image_url), ...]."""
+    writeback = []
+    for e in entries:
+        if e.get("image_url"):
+            continue
+        man = manifest.get(e["barcode"])
+        if not man or not os.path.exists(man.get("local_path", "")):
+            stats["image_no_local"] += 1
+            continue
+        if dry_run:
+            stats["image_would_upload"] += 1
+            continue
+        if not uploader.enabled:
+            stats["image_skipped_no_creds"] += 1
+            continue
+        try:
+            e["image_url"] = uploader.upload(man["local_path"], man["storage_target"])
+            if not e.get("image_source_url"):
+                e["image_source_url"] = man.get("source_url")
+            writeback.append((e["barcode"], e["image_url"]))
+            stats["image_uploaded"] += 1
+        except Exception as ex:  # noqa: BLE001 — 한 건 실패가 전체 업로드를 막지 않게
+            print(f"  IMG FAIL {e['barcode']}: {ex}")
+            stats["image_failed"] += 1
+    return writeback
+
+
 def writeback_attachments(cur, attach_rows):
     """붙은 행(id)에만 prod_master_id 기록. barcode가 아니라 행 식별자(id) 기준이라,
     같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
@@ -180,7 +261,10 @@ def main():
     args = ap.parse_args()
 
     target = PgTarget(args.target_dsn) if args.target_dsn else RestTarget()
+    manifest = load_image_manifest()
+    uploader = StorageUploader()
     stats = Counter()
+    image_writeback = []  # (barcode, image_url) — Storage 업로드 성공분, 로컬에 되쓰기
 
     with connect() as src:
         masters, bc_by_master = fetch_promoted(src)
@@ -197,6 +281,8 @@ def main():
         attach_rows = []  # (prod_master_id, collected_id, local_master_id) — 붙은 행만
         for local_id, vals in masters.items():
             entries = bc_by_master.get(local_id, [])
+            # image_url 이 비어있는 바코드는 정리된 JPEG 를 Storage 에 올려 채운다.
+            image_writeback += enrich_images(entries, manifest, uploader, stats, args.dry_run)
             payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
                        for e in entries]
             bc_to_cids = {}
@@ -218,9 +304,13 @@ def main():
 
         # prod_master_id는 **붙은 그 행(id)** 에만 기록. barcode 기준이 아니라 행 식별자
         # 기준이라, 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
-        if not args.dry_run and attach_rows:
+        if not args.dry_run and (attach_rows or image_writeback):
             with src.cursor() as cur:
                 writeback_attachments(cur, attach_rows)
+                # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피)
+                for barcode, image_url in image_writeback:
+                    cur.execute("update product_barcodes set image_url=%s where barcode=%s",
+                                (image_url, barcode))
             src.commit()
 
     print(dict(stats))
