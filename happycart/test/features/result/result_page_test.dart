@@ -21,6 +21,24 @@ ProductLookupResult _product({String? imageUrl}) => ProductLookupResult(
 );
 
 void main() {
+  // 히어로가 큰 화면이라 기본 800x600 테스트 표면에선 오버플로 — 실제 폰 크기로.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+    view.physicalSize = const Size(1080, 2400);
+    view.devicePixelRatio = 1.0;
+  });
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
+  });
+
+  // 히어로 합성: 카트·손 마크(Image.asset) + 제품 이미지 슬롯. 제품 이미지는
+  // semanticLabel(제품명)로 식별한다.
+  Finder productImage() => find.byWidgetPredicate(
+    (w) => w is Image && w.semanticLabel == '사이다볼',
+  );
+
   testWidgets('success result renders product image when imageUrl is present', (
     tester,
   ) async {
@@ -35,11 +53,10 @@ void main() {
       ),
     );
 
-    final image = tester.widget<Image>(find.byType(Image));
-    expect(image.semanticLabel, '사이다볼');
+    expect(productImage(), findsOneWidget);
   });
 
-  testWidgets('success result falls back to cart icon without imageUrl', (
+  testWidgets('success result falls back to placeholder icon without imageUrl', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -51,7 +68,8 @@ void main() {
       ),
     );
 
-    expect(find.byIcon(Icons.shopping_cart_outlined), findsOneWidget);
-    expect(find.byType(Image), findsNothing);
+    // 제품 이미지(network)는 없고, 슬롯에 fallback 아이콘이 뜬다.
+    expect(productImage(), findsNothing);
+    expect(find.byIcon(Icons.shopping_bag_outlined), findsOneWidget);
   });
 }

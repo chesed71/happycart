@@ -34,21 +34,37 @@ class ResultPage extends StatelessWidget {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Verdict 테마 (ok / stop / neutral)
+// Verdict 테마 (ok / stop) — 라이트 톤 히어로 + 카트·손 합성 마크
 // ────────────────────────────────────────────────────────────────
 class _VT {
-  final Color gradA, gradB, deep, main, soft;
-  final String word;
+  /// 히어로 라이트 톤 배경 그라디언트.
+  final Color heroA, heroB;
+
+  /// verdict 단어 색 (deep).
+  final Color word;
+
+  /// count 배지 등 강조색.
+  final Color accent;
+
+  /// flag dot/tag 배경·글자.
+  final Color soft, softFg;
+
+  final String wordText;
   final String? sub;
-  final IconData icon;
+
+  /// 합성 마크 에셋 (카트·손).
+  final String cartAsset, handAsset;
+
   const _VT({
-    required this.gradA,
-    required this.gradB,
-    required this.deep,
-    required this.main,
-    required this.soft,
+    required this.heroA,
+    required this.heroB,
     required this.word,
-    required this.icon,
+    required this.accent,
+    required this.soft,
+    required this.softFg,
+    required this.wordText,
+    required this.cartAsset,
+    required this.handAsset,
     this.sub,
   });
 }
@@ -57,24 +73,28 @@ _VT _vt(Verdict v) {
   switch (v) {
     case Verdict.okay:
       return const _VT(
-        gradA: AppTheme.okGradA,
-        gradB: AppTheme.okGradB,
-        deep: AppTheme.okDeep,
-        main: Color(0xFF1E9E63),
+        heroA: Color(0xFFE7F6EE),
+        heroB: Color(0xFFFCFBF8),
+        word: Color(0xFF0A6B40),
+        accent: Color(0xFF00A05B),
         soft: AppTheme.okSoft,
-        word: '괜찮아요',
-        icon: Icons.check_rounded,
+        softFg: Color(0xFF0A6B40),
+        wordText: '괜찮아요',
+        cartAsset: 'assets/verdict/cart_ok.png',
+        handAsset: 'assets/verdict/hand_ok.png',
       );
     case Verdict.notOkay:
       return const _VT(
-        gradA: AppTheme.stopGradA,
-        gradB: AppTheme.stopGradB,
-        deep: AppTheme.stopDeep,
-        main: AppTheme.stopMain,
+        heroA: Color(0xFFFCEAE6),
+        heroB: Color(0xFFFCFBF8),
+        word: AppTheme.stopDeep,
+        accent: AppTheme.stopMain,
         soft: AppTheme.stopSoft,
-        word: '잠깐',
-        icon: Icons.block_rounded,
-        sub: '초가공·인공 첨가물이 발견됐어요. 성분을 확인해보세요.',
+        softFg: AppTheme.stopDeep,
+        wordText: '잠깐',
+        sub: '초가공·인공 첨가물이 여러 개 들어 있어요.',
+        cartAsset: 'assets/verdict/cart_stop.png',
+        handAsset: 'assets/verdict/hand_stop.png',
       );
   }
 }
@@ -235,127 +255,125 @@ class _SuccessLayoutState extends State<_SuccessLayout>
   @override
   Widget build(BuildContext context) {
     final theme = _vt(widget.product.verdict);
+    final isOk = widget.product.verdict == Verdict.okay;
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      // 라이트 톤 히어로 — status bar 아이콘은 어둡게.
+      value: SystemUiOverlayStyle.dark,
       child: Column(
         children: [
-          _buildHero(theme),
-          Expanded(child: _buildBody(theme)),
+          if (isOk)
+            // 괜찮아요: 성분/설명 없이 합성 이미지를 화면 정중앙에.
+            Expanded(child: _buildHero(theme, fullscreen: true))
+          else ...[
+            _buildHero(theme, fullscreen: false),
+            Expanded(child: _buildBody(theme)),
+          ],
           _buildFooter(context),
         ],
       ),
     );
   }
 
-  Widget _buildHero(_VT theme) {
+  Widget _buildHero(_VT theme, {required bool fullscreen}) {
     final topPad = MediaQuery.viewPaddingOf(context).top;
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 합성 히어로 (카트 + 제품 + 손, pop 애니메이션)
+        ScaleTransition(
+          scale: _badgeScale,
+          child: _VerdictHeroArt(
+            theme: theme,
+            imageUrl: widget.product.imageUrl,
+            productName: widget.product.name,
+            size: fullscreen ? 300 : 264,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          theme.wordText,
+          style: TextStyle(
+            fontSize: 42,
+            fontWeight: FontWeight.w800,
+            color: theme.word,
+            letterSpacing: -0.84,
+            height: 1.0,
+          ),
+        ),
+        if (theme.sub != null) ...[
+          const SizedBox(height: 11),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              theme.sub!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: AppTheme.inkSoft,
+                height: 1.5,
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        _ProductNamePill(product: widget.product),
+      ],
+    );
+
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [theme.gradA, theme.gradB],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [theme.heroA, theme.heroB],
         ),
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(30)),
+        borderRadius: fullscreen
+            ? null
+            : const BorderRadius.vertical(bottom: Radius.circular(30)),
       ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(0, topPad, 0, 30),
-        child: Column(
-          children: [
-            // TopBar
-            SizedBox(
-              height: 52,
-              child: Row(
-                children: [
-                  _IconBtn(
-                    icon: Icons.chevron_left_rounded,
-                    onTap: widget.onRescan,
-                  ),
-                  const Expanded(
-                    child: Text(
-                      '스캔 결과',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
+      child: Column(
+        children: [
+          SizedBox(height: topPad),
+          // TopBar (라이트 배경 위 어두운 아이콘)
+          SizedBox(
+            height: 52,
+            child: Row(
+              children: [
+                _IconBtn(
+                  icon: Icons.chevron_left_rounded,
+                  onTap: widget.onRescan,
+                ),
+                const Expanded(
+                  child: Text(
+                    '스캔 결과',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.ink,
                     ),
                   ),
-                  _IconBtn(icon: Icons.ios_share_rounded, onTap: () {}),
-                ],
-              ),
+                ),
+                _IconBtn(icon: Icons.ios_share_rounded, onTap: () {}),
+              ],
             ),
-            // 히어로 콘텐츠
+          ),
+          // 히어로 콘텐츠
+          if (fullscreen)
+            Expanded(child: Center(child: content))
+          else
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 14, 24, 0),
-              child: Column(
-                children: [
-                  // Badge (pop 애니메이션)
-                  ScaleTransition(
-                    scale: _badgeScale,
-                    child: Container(
-                      width: 104,
-                      height: 104,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withValues(alpha: 0.18),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            blurRadius: 30,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.25),
-                        ),
-                      ),
-                      child: Icon(theme.icon, size: 52, color: Colors.white),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  // Verdict 단어
-                  Text(
-                    theme.word,
-                    style: const TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: -0.8,
-                      height: 1.0,
-                    ),
-                  ),
-                  // 서브타이틀
-                  if (theme.sub != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      theme.sub!,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white.withValues(alpha: 0.92),
-                        height: 1.45,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                  // 제품 칩
-                  _ProductChip(product: widget.product),
-                ],
-              ),
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 26),
+              child: content,
             ),
-          ],
-        ),
+        ],
       ),
     );
   }
 
   Widget _buildBody(_VT theme) {
-    final product = widget.product;
     final hasBad = _badPairs.isNotEmpty;
-    final hasGood = product.goodIngredients.isNotEmpty;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(18, 22, 18, 16),
@@ -368,7 +386,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
               title: '신경 쓰이는 성분',
               count: _badPairs.length,
               hint: '탭하면 이유를 볼 수 있어요',
-              countColor: theme.main,
+              countColor: theme.accent,
             ),
             for (int i = 0; i < _badPairs.length; i++) ...[
               if (i > 0) const SizedBox(height: 10),
@@ -378,55 +396,12 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                 reason: _reasonDesc(_badPairs[i].$2),
                 ruleCode: _badPairs[i].$2,
                 dotBg: theme.soft,
-                dotFg: theme.deep,
+                dotFg: theme.softFg,
                 isOpen: _expanded[i],
                 onToggle: () =>
                     setState(() => _expanded[i] = !_expanded[i]),
               ),
             ],
-          ],
-
-          // 깨끗한 성분
-          if (hasGood) ...[
-            SizedBox(height: hasBad ? 22 : 4),
-            _SectionHeader(
-              title: '깨끗한 성분',
-              count: product.goodIngredients.length,
-              countColor: theme.main,
-            ),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppTheme.line),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF785A28).withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
-                  for (int i = 0; i < product.goodIngredients.length; i++)
-                    _CleanRow(
-                      name: _canonicalLabel(product.goodIngredients[i]),
-                      isLast: i == product.goodIngredients.length - 1,
-                    ),
-                ],
-              ),
-            ),
-          ],
-
-          // 안내 배너 (괜찮아요 상태)
-          if (product.verdict == Verdict.okay) ...[
-            const SizedBox(height: 14),
-            _NoteBanner(
-              text: '신경 쓰이는 성분은 발견되지 않았어요. 초가공·인공 첨가물 회피 기준으로 괜찮아요.',
-              bg: AppTheme.okSoft,
-              fg: AppTheme.okDeep,
-            ),
           ],
 
           const SizedBox(height: 22),
@@ -520,100 +495,150 @@ class _IconBtn extends StatelessWidget {
       height: 48,
       child: IconButton(
         onPressed: onTap,
-        icon: Icon(icon, color: Colors.white, size: 24),
+        icon: Icon(icon, color: AppTheme.ink, size: 24),
       ),
     );
   }
 }
 
-class _ProductChip extends StatelessWidget {
-  final ProductLookupResult product;
-  const _ProductChip({required this.product});
+/// 히어로 합성 — 흰 원형 배지 안에 [카트(뒤) · 제품 이미지(가운데 슬롯) · 손(앞)]을
+/// verdict 색 마크로 쌓는다. 제품이 바뀌어도 슬롯의 이미지만 교체된다.
+class _VerdictHeroArt extends StatelessWidget {
+  final _VT theme;
+  final String? imageUrl;
+  final String productName;
+  final double size;
+  const _VerdictHeroArt({
+    required this.theme,
+    required this.imageUrl,
+    required this.productName,
+    required this.size,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = product.imageUrl;
-    return Container(
-      padding: const EdgeInsets.all(18),
+    final url = imageUrl;
+    final productImg = Container(
+      width: size * 0.40,
+      height: size * 0.40,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 60,
-            height: 60,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.9),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: imageUrl != null && imageUrl.isNotEmpty
-                ? Image.network(
-                    imageUrl,
-                    semanticLabel: product.name,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const Icon(
-                      Icons.shopping_cart_outlined,
-                      size: 28,
-                      color: AppTheme.brand,
-                    ),
-                  )
-                : const Icon(
-                    Icons.shopping_cart_outlined,
-                    size: 28,
-                    color: AppTheme.brand,
-                  ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        product.name,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          height: 1.25,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '· ${product.brand}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white.withValues(alpha: 0.8),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  product.category != null
-                      ? '${product.size} · ${product.category}'
-                      : product.size,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white.withValues(alpha: 0.82),
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
         ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: url != null && url.isNotEmpty
+          ? Image.network(
+              url,
+              semanticLabel: productName,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => _fallback(),
+            )
+          : _fallback(),
+    );
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF785A28).withValues(alpha: 0.16),
+            blurRadius: 30,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipOval(
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Stack(
+            children: [
+              // 카트 (뒤, 우측 하단 — 제품에 가리지 않게)
+              Positioned(
+                bottom: size * 0.05,
+                right: size * 0.12,
+                child: Image.asset(theme.cartAsset, width: size * 0.60),
+              ),
+              // 제품 이미지 (원 중앙)
+              Align(
+                alignment: Alignment.center,
+                child: productImg,
+              ),
+              // 손 마크 (앞, 좌상단 — 원 안으로 들어오게 우측 아래로)
+              Positioned(
+                top: size * 0.13,
+                left: size * 0.13,
+                child: Image.asset(theme.handAsset, width: size * 0.40),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _fallback() => const Center(
+    child: Icon(Icons.shopping_bag_outlined, size: 30, color: AppTheme.inkMute),
+  );
+}
+
+/// 제품 이름 pill — "**제품명** · 브랜드".
+class _ProductNamePill extends StatelessWidget {
+  final ProductLookupResult product;
+  const _ProductNamePill({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          border: Border.all(color: AppTheme.line),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF785A28).withValues(alpha: 0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Text.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: product.name,
+                style: const TextStyle(
+                  color: AppTheme.ink,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              TextSpan(
+                text: '  ·  ${product.brand}',
+                style: const TextStyle(
+                  color: AppTheme.inkSoft,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 13.5, height: 1.2),
+        ),
       ),
     );
   }
@@ -820,86 +845,6 @@ class _FlagCard extends StatelessWidget {
               ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _CleanRow extends StatelessWidget {
-  final String name;
-  final bool isLast;
-  const _CleanRow({required this.name, required this.isLast});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-      decoration: BoxDecoration(
-        border: isLast
-            ? null
-            : const Border(bottom: BorderSide(color: AppTheme.line)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            decoration: const BoxDecoration(
-              color: AppTheme.okSoft,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.check_rounded,
-              size: 14,
-              color: AppTheme.okDeep,
-            ),
-          ),
-          const SizedBox(width: 11),
-          Text(
-            name,
-            style: const TextStyle(
-              fontSize: 14.5,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.ink,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NoteBanner extends StatelessWidget {
-  final String text;
-  final Color bg, fg;
-  const _NoteBanner({required this.text, required this.bg, required this.fg});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 4),
-      padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.info_outline_rounded, size: 18, color: fg),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.5,
-                fontWeight: FontWeight.w500,
-                color: fg,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
