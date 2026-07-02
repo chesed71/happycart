@@ -16,6 +16,7 @@ master upsert는 ingredients_hash(UNIQUE)를 conflict target으로 — 초기 de
 from __future__ import annotations
 
 import argparse
+import re
 from collections import Counter
 
 from common import connect
@@ -24,7 +25,44 @@ from match_enrich import norm
 SOURCE_BY_COLLECTED = {
     "coupang": "쿠팡 크롤링 + 직접 판독",
     "kakamuka": "kakamuka 크롤링",
+    "lottemartzetta": "롯데마트 제타 크롤링 + 직접 판독",
 }
+
+# 앱 표시명은 브랜드+상품명(brand·size 는 별도 컬럼). 수집 타이틀에서 앞 브랜드와
+# 끝 용량(숫자 든 괄호)을 떼어 product_masters.name 을 제품명만으로 만든다.
+# 맛/버전 괄호("(밀크)", "(오리지널)")는 숫자가 없으므로 보존한다.
+_SIZE_PAREN = re.compile(r"\s*\((?=[^()]*\d)[^()]*\)\s*$")
+
+
+def _strip_brand(t: str, brand: str) -> str:
+    if not brand:
+        return t
+    bnorm = brand.replace(" ", "")
+    toks = t.split()
+    acc = ""
+    for i, tok in enumerate(toks):
+        acc += tok
+        if acc == bnorm:
+            return " ".join(toks[i + 1:])
+        if not bnorm.startswith(acc):
+            break
+    if t.startswith(brand):
+        return t[len(brand):].strip()
+    return t
+
+
+def clean_product_name(name: str, brand: str | None) -> str:
+    if not name:
+        return name
+    t = name.strip()
+    while True:
+        t2 = _SIZE_PAREN.sub("", t).strip()
+        if t2 == t:
+            break
+        t = t2
+    t = _strip_brand(t, (brand or "").strip()).strip()
+    t = re.sub(r"[\s,·/]+$", "", t).strip()
+    return t or name
 
 # 승격 후보 잠금 쿼리. test_invariants.py가 이 상수를 그대로 써서 잠금 회귀를 막는다
 # (promote.py에서 FOR UPDATE가 빠지면 잠금 테스트도 깨지도록).
@@ -51,14 +89,29 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dsn", default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--source", default=None)
+    ap.add_argument("--source-ref", default=None)
+    ap.add_argument("--id", default=None,
+                    help="단일 collected_products.id만 승격 (데이터데스크 카드별 승격용)")
+    ap.add_argument("--ids", default=None,
+                    help="콤마구분 collected_products.id 집합만 승격 (데이터데스크 승격보류 일괄용)")
     args = ap.parse_args()
     stats = Counter()
+    id_set = {x for x in args.ids.split(",") if x} if args.ids else None
 
     with connect(args.dsn) as conn, conn.cursor() as cur:
         cur.execute(CANDIDATE_SELECT)
         rows = cur.fetchall()
+        if args.id:
+            rows = [r for r in rows if str(r[0]) == args.id]
+        if id_set is not None:
+            rows = [r for r in rows if str(r[0]) in id_set]
+        if args.source:
+            rows = [r for r in rows if r[1] == args.source]
+        if args.source_ref:
+            rows = [r for r in rows if r[2] == args.source_ref]
         # 승격 보류 사유별 카운트 (judged인데 조건 미달)
-        cur.execute("""
+        held_sql = """
             select
               count(*) filter (where review_decision is distinct from 'verified') as not_reviewed,
               count(*) filter (where review_decision = 'verified' and (
@@ -67,7 +120,15 @@ def main():
                 or brand is null or name is null or size is null
                 or confidence = 'low')) as reviewed_but_incomplete
             from collected_products where stage = 'judged'
-        """)
+        """
+        held_params = []
+        if args.source:
+            held_sql += " and source = %s"
+            held_params.append(args.source)
+        if args.source_ref:
+            held_sql += " and source_ref = %s"
+            held_params.append(args.source_ref)
+        cur.execute(held_sql, held_params)
         not_reviewed, reviewed_incomplete = cur.fetchone()
         stats["held_not_reviewed"] = not_reviewed
         stats["held_reviewed_incomplete"] = reviewed_incomplete
@@ -102,6 +163,8 @@ def main():
                 continue
 
             rep = members[0]
+            # 앱 표시명 = 브랜드+상품명. 수집 타이틀에서 앞 브랜드·끝 용량을 떼어 제품명만 저장.
+            master_name = clean_product_name(rep[4], rep[3])
             cur.execute("""
                 insert into product_masters
                   (brand, name, category, ingredients_raw, ingredients_tokens,
@@ -112,7 +175,7 @@ def main():
                         %s, %s, now(), 'unverified')
                 on conflict (ingredients_hash) do nothing
                 returning id
-            """, (rep[3], rep[4], rep[6], rep[8], rep[9], rep[10], rep[11],
+            """, (rep[3], master_name, rep[6], rep[8], rep[9], rep[10], rep[11],
                   rep[12], rep[13], rep[14], rep[15],
                   SOURCE_BY_COLLECTED[rep[1]], rep[17]))
             got = cur.fetchone()

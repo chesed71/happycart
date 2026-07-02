@@ -9,11 +9,14 @@ RPC 테스트는 로컬 happycart(운영과 동일 스키마)에서 트랜잭션
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 
 import psycopg
 
 from common import dsn
+from promote import SOURCE_BY_COLLECTED
 from upload_prod import classify_dryrun, writeback_attachments
 
 results = []
@@ -158,6 +161,46 @@ def test_dryrun_classify():
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
 
 
+def test_lottemartzetta_source_support():
+    check("Lottemart Zetta 승격 source 매핑", "lottemartzetta" in SOURCE_BY_COLLECTED)
+
+
+def test_lottemartzetta_image_lookup():
+    import prepare_images
+
+    old_root = prepare_images.COUPANG_OUTPUT
+    with tempfile.TemporaryDirectory() as tmp:
+        prepare_images.COUPANG_OUTPUT = tmp
+        try:
+            rel = "_uploads/lottemartzetta__8803143116452.png"
+            os.makedirs(os.path.join(tmp, "_uploads"))
+            path = os.path.join(tmp, rel)
+            with open(path, "wb") as fh:
+                fh.write(b"png")
+            got = prepare_images._find_source_image(
+                "lottemartzetta",
+                "8803143116452",
+                {"product": {}, "lottemartzetta": {}},
+                rel,
+            )
+            check("Lottemart Zetta 대표 이미지 lookup", got == path, str(got))
+
+            jpg_rel = "work/images/products/8803143116452.jpg"
+            os.makedirs(os.path.join(tmp, "work", "images", "products"))
+            jpg_path = os.path.join(tmp, jpg_rel)
+            with open(jpg_path, "wb") as fh:
+                fh.write(b"jpg")
+            got = prepare_images._find_source_image(
+                "lottemartzetta",
+                "8803143116452",
+                {"product": {"image_path": rel}, "lottemartzetta": {}},
+                jpg_rel,
+            )
+            check("Lottemart Zetta raw PNG 우선", got == path, str(got))
+        finally:
+            prepare_images.COUPANG_OUTPUT = old_root
+
+
 def test_writeback_row_scoped():
     """회귀 잠금: 같은 barcode를 가진 promoted 행 2개에서, writeback이 대상 행(id)만
     갱신하고 다른 행은 NULL 유지. (barcode 기준이면 둘 다 찍혀 실패 → 그 버그를 잠근다)"""
@@ -193,6 +236,7 @@ def test_writeback_row_scoped():
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
+              test_lottemartzetta_source_support, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:
             t()
