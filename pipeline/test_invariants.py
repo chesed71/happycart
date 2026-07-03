@@ -332,11 +332,31 @@ def test_no_clobber():
     check("no-clobber 가드(UPSERT_SQL)", ok, "reviewed_at is null 조건 존재")
 
 
+def test_clean_product_name():
+    """표시명 정제: 선두 판촉/채널 브래킷([SCO],【단독행사】) 제거 + 끝용량·앞브랜드 제거,
+    맛/버전 괄호는 보존 (DB 불필요한 순수함수 검증)."""
+    from promote import clean_product_name as c
+    cases = [
+        # (name, brand, expected)
+        ("[SCO] 롯데 죠스바젤리 (70G)", "롯데", "죠스바젤리"),      # 선두 브래킷+브랜드+용량 모두 제거
+        ("【단독행사】 코르도리바 엑스트라버진 올리브오일", "미성패밀리",
+         "코르도리바 엑스트라버진 올리브오일"),                     # 선두 모난괄호 제거
+        ("[SCO] 마즈 트윅스싱글 (46G)", "한국마즈", "마즈 트윅스싱글"),  # 브랜드 불일치 토큰은 보존
+        ("오레오 샌드쿠키 화이트 (100G)", "오레오", "샌드쿠키 화이트"),  # 기존 동작(브랜드+용량) 회귀 방지
+        ("(밀크) 초코바", "오레오", "(밀크) 초코바"),                 # 맛 괄호는 보존(브래킷 아님)
+        ("그냥상품", "브랜드", "그냥상품"),                          # 접두 없으면 무변화
+    ]
+    for name, brand, exp in cases:
+        got = c(name, brand)
+        check(f"clean_product_name({name!r})", got == exp, f"got={got!r} exp={exp!r}")
+
+
 def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
               test_rollback_scope, test_rollback_shared_master,
-              test_rollback_shared_barcode, test_rollback_divergent_owner, test_no_clobber]:
+              test_rollback_shared_barcode, test_rollback_divergent_owner, test_no_clobber,
+              test_clean_product_name]:
         try:
             t()
         except Exception as e:  # noqa

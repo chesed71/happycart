@@ -33,6 +33,10 @@ SOURCE_BY_COLLECTED = {
 # 맛/버전 괄호("(밀크)", "(오리지널)")는 숫자가 없으므로 보존한다.
 _SIZE_PAREN = re.compile(r"\s*\((?=[^()]*\d)[^()]*\)\s*$")
 
+# 선두 판촉/채널 브래킷: "[SCO]", "【단독행사】", "《기획》", "<한정>" 등 이름 맨 앞의
+# 대괄호/모난괄호 블록을 앞에서 반복 제거한다(상품명 자체와 무관한 채널·행사 표기).
+_LEAD_BRACKET = re.compile(r"^\s*(?:\[[^\]]*\]|【[^】]*】|《[^》]*》|<[^>]*>)\s*")
+
 
 def _strip_brand(t: str, brand: str) -> str:
     if not brand:
@@ -55,6 +59,11 @@ def clean_product_name(name: str, brand: str | None) -> str:
     if not name:
         return name
     t = name.strip()
+    while True:
+        t2 = _LEAD_BRACKET.sub("", t, count=1).strip()
+        if t2 == t:
+            break
+        t = t2
     while True:
         t2 = _SIZE_PAREN.sub("", t).strip()
         if t2 == t:
