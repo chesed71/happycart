@@ -67,6 +67,21 @@ def _http_url(value: str | None) -> str | None:
     return None
 
 
+def _manual_upload(source: str, source_ref: str, barcode: str | None) -> str | None:
+    """검수자가 데이터데스크에서 등록한 수동 이미지(_uploads/)를 찾는다 — 최우선 소스.
+    이 행의 업로드(<source>__<source_ref>) 우선, 없으면 같은 바코드의 업로드(소스 무관)."""
+    upl = os.path.join(COUPANG_OUTPUT, "_uploads")
+    for ext in _IMG_EXTS:
+        p = os.path.join(upl, f"{source}__{source_ref}{ext}")
+        if os.path.exists(p):
+            return p
+    if barcode:
+        for p in sorted(glob.glob(os.path.join(upl, f"*__{barcode}.*"))):
+            if p.lower().endswith(_IMG_EXTS):
+                return p
+    return None
+
+
 def _find_source_image(source: str, source_ref: str, raw: dict, image_path: str | None = None) -> str | None:
     """우선순위대로 로컬 소스 이미지 경로를 찾는다 (없으면 None)."""
     pid = str(source_ref)
@@ -169,7 +184,9 @@ def main():
 
         for source, source_ref, barcode, raw, source_url, image_path in rows:
             raw = raw or {}
-            src = _find_source_image(source, source_ref, raw, image_path)
+            # 수동 등록 이미지(_uploads)가 있으면 최우선 — CDN/detail 로 덮지 않는다.
+            manual = _manual_upload(source, source_ref, barcode)
+            src = manual or _find_source_image(source, source_ref, raw, image_path)
             if not src:
                 stats["no_source_image"] += 1
                 continue
@@ -204,9 +221,13 @@ def main():
                 stats["oversized_after_50q"] += 1
 
             checksum = hashlib.sha256(data).hexdigest()
-            # collected_products.image_path + 로컬 product_barcodes.image_source_url 갱신
+            # collected_products.image_path + 로컬 product_barcodes.image_source_url 갱신.
+            # 수동 업로드면 image_path 를 _uploads/ 상대경로로 유지 — 데스크 썸네일·재실행이
+            # 사람이 등록한 이미지를 계속 존중하도록(파이프라인 출력 경로로 덮지 않는다).
             stored_image_path = out_path
-            if source == "lottemartzetta":
+            if manual:
+                stored_image_path = os.path.relpath(manual, COUPANG_OUTPUT)
+            elif source == "lottemartzetta":
                 stored_image_path = (
                     product.get("image_path")
                     or zetta.get("productImagePath")
