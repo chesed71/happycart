@@ -16,6 +16,7 @@ from common import connect, dsn
 from tokenizer import tokenize
 
 FIXTURE = "/Users/innovator/Project/HappyCart/happycart/tool/fixtures/seed_products.json"
+REVIEW_GATED_SOURCES = {"lottemartzetta"}
 
 # golden 불일치 허용 목록 — 시드 수작업 토큰의 비일관 케이스. 사유 필수.
 GOLDEN_EXCEPTIONS: dict[str, str] = {
@@ -79,13 +80,30 @@ def run_golden() -> int:
     return 1 if failed else 0
 
 
-def run_tokenize(dsn: str | None) -> None:
+def run_tokenize(
+    dsn: str | None,
+    source: str | None = None,
+    source_ref: str | None = None,
+    ids: list[str] | None = None,
+) -> None:
     stats = Counter()
     with connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute("""
+        query = """
             select id, ingredients_raw from collected_products
             where stage = 'parsed' and ingredients_raw is not null
-        """)
+              and (source <> all(%s) or review_decision = 'verified')
+        """
+        params = [list(REVIEW_GATED_SOURCES)]
+        if source:
+            query += " and source = %s"
+            params.append(source)
+        if source_ref:
+            query += " and source_ref = %s"
+            params.append(source_ref)
+        if ids:
+            query += " and id = any(%s::uuid[])"
+            params.append(ids)
+        cur.execute(query, params)
         rows = cur.fetchall()
         for cid, raw in rows:
             tokens = tokenize(raw)
@@ -108,10 +126,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dsn", default=None)
     ap.add_argument("--golden", action="store_true")
+    ap.add_argument("--source", default=None)
+    ap.add_argument("--source-ref", default=None)
+    ap.add_argument("--ids", default=None,
+                    help="콤마구분 collected_products.id 만 토큰화 (데이터데스크 승격보류 일괄용)")
     args = ap.parse_args()
     if args.golden:
         raise SystemExit(run_golden())
-    run_tokenize(args.dsn)
+    ids = [x for x in args.ids.split(",") if x] if args.ids else None
+    run_tokenize(args.dsn, args.source, args.source_ref, ids)
 
 
 if __name__ == "__main__":

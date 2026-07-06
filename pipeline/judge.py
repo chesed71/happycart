@@ -18,6 +18,7 @@ from collections import Counter
 from common import connect
 
 HAPPYCART_APP_DIR = "/Users/innovator/Project/HappyCart/happycart"
+REVIEW_GATED_SOURCES = {"lottemartzetta"}
 
 
 def run_rules(items: list[dict]) -> list[dict]:
@@ -36,13 +37,34 @@ def current_rule_version() -> str:
     return run_rules([{"ref": "_probe", "tokens": ["물"]}])[0]["rule_version"]
 
 
-def judge_collected(conn, rule_version: str, stats: Counter) -> None:
+def judge_collected(
+    conn,
+    rule_version: str,
+    stats: Counter,
+    source: str | None = None,
+    source_ref: str | None = None,
+    ids: list[str] | None = None,
+) -> None:
     with conn.cursor() as cur:
-        cur.execute("""
+        query = """
             select id, ingredients_tokens from collected_products
-            where stage = 'tokenized'
-               or (stage = 'judged' and rule_version is distinct from %s)
-        """, (rule_version,))
+            where (
+                stage = 'tokenized'
+                or (stage = 'judged' and rule_version is distinct from %s)
+            )
+              and (source <> all(%s) or review_decision = 'verified')
+        """
+        params = [rule_version, list(REVIEW_GATED_SOURCES)]
+        if source:
+            query += " and source = %s"
+            params.append(source)
+        if source_ref:
+            query += " and source_ref = %s"
+            params.append(source_ref)
+        if ids:
+            query += " and id = any(%s::uuid[])"
+            params.append(ids)
+        cur.execute(query, params)
         rows = cur.fetchall()
         if not rows:
             return
@@ -97,15 +119,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dsn", default=None)
     ap.add_argument("--target", choices=["collected", "masters"], default="collected")
+    ap.add_argument("--source", default=None)
+    ap.add_argument("--source-ref", default=None)
+    ap.add_argument("--ids", default=None,
+                    help="콤마구분 collected_products.id 만 판정 (데이터데스크 승격보류 일괄용)")
     args = ap.parse_args()
 
     stats = Counter()
     rule_version = current_rule_version()
     print(f"rule_version = {rule_version}")
+    ids = [x for x in args.ids.split(",") if x] if args.ids else None
 
     with connect(args.dsn) as conn:
         if args.target == "collected":
-            judge_collected(conn, rule_version, stats)
+            judge_collected(conn, rule_version, stats, args.source, args.source_ref, ids)
         else:
             judge_masters(conn, rule_version, stats)
         conn.commit()
