@@ -60,6 +60,41 @@ def _fixture(cur, *, stage="judged", barcode="8801037088168", ingredients="밀�
     return cur.fetchone()[0]
 
 
+def _promotable_parent(cur, barcode, name="N-parent"):
+    """승격 가능한 부모(verified/judged, master NOT NULL 배열까지 채움) 생성, id 반환."""
+    pid = _fixture(cur, stage="judged", barcode=barcode,
+                   review_decision="verified", confidence="high")
+    cur.execute(
+        """update collected_products set name=%s,
+             bad_ingredients_detected='{}', good_ingredients_detected='{}',
+             verdict_reason_codes='{}' where id=%s""",
+        (name, pid),
+    )
+    return pid
+
+
+def _merged_child(cur, parent, barcode, *, stage="parsed", review_decision="needs_fix",
+                  confidence="high"):
+    """부모에 머지된 자식 행(raw.merged_into=parent) 생성, id 반환.
+    stage='judged'+review_decision='verified'로 주면 자체 후보 게이트도 통과하게 된다."""
+    cur.execute(
+        """
+        insert into collected_products
+          (source, source_ref, raw, brand, name, size, category, barcode,
+           ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
+           computed_at, stage, review_decision,
+           bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes)
+        values ('coupang', %s, jsonb_build_object('merged_into', %s::text),
+                'B', 'N-child', '20g', 'cat', %s, '밀가루, 설탕', %s,
+                '{밀가루,설탕}', 'not_okay'::verdict_enum, 'v1.1.0', now(),
+                %s, %s, '{}', '{}', '{}')
+        returning id
+        """,
+        (f"test-child-{barcode}", parent, barcode, confidence, stage, review_decision),
+    )
+    return cur.fetchone()[0]
+
+
 def test_rpc_invariants():
     """RPC: stage=parsed 복원 + 파생 비움 + reviewed_at + confidence 보존/정합."""
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
@@ -351,12 +386,146 @@ def test_clean_product_name():
         check(f"clean_product_name({name!r})", got == exp, f"got={got!r} exp={exp!r}")
 
 
+def test_merged_child_promotes_with_parent():
+    """승격: verified 부모에 머지된 자식 바코드는 부모 master 로 동반 승격되고,
+    자식의 사람 검수 필드(review_decision)는 건드리지 않는다(머지 관계 근거)."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        # 승격 후보 부모(verified, judged, 모든 게이트 통과)
+        parent = _fixture(cur, stage="judged", barcode=SYN_BC_1,
+                          review_decision="verified", confidence="high")
+        # product_masters 는 detected/reason 배열이 NOT NULL — 부모에 빈 배열을 채운다.
+        cur.execute("""update collected_products set
+                         bad_ingredients_detected='{}', good_ingredients_detected='{}',
+                         verdict_reason_codes='{}' where id=%s""", (parent,))
+        # 머지 자식: 자체 바코드+용량, review_decision='needs_fix', stage='parsed'.
+        # 부모에 raw.merged_into 로 붙어 있다(바코드 합치기 결과).
+        cur.execute(
+            """
+            insert into collected_products
+              (source, source_ref, raw, brand, name, size, category, barcode,
+               ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
+               computed_at, stage, review_decision)
+            values ('coupang', %s, jsonb_build_object('merged_into', %s::text),
+                    'B', 'N-child', '20g', 'cat', %s, '밀가루, 설탕', 'high',
+                    '{밀가루,설탕}', 'not_okay'::verdict_enum, 'v1.1.0', now(),
+                    'parsed', 'needs_fix')
+            returning id
+            """,
+            (f"test-child-{SYN_BC_2}", parent, SYN_BC_2),
+        )
+        child = cur.fetchone()[0]
+
+        run_promotion(cur, id=str(parent), stats=Counter())
+
+        cur.execute(
+            "select stage, review_decision, promoted_master_id from collected_products where id=%s",
+            (child,),
+        )
+        cstage, creview, cmaster = cur.fetchone()
+        check("자식 동반 승격(stage=promoted)", cstage == "promoted", str(cstage))
+        check("자식 review_decision 불변(needs_fix)", creview == "needs_fix", str(creview))
+        cur.execute("select master_id from product_barcodes where barcode=%s", (SYN_BC_2,))
+        bcrow = cur.fetchone()
+        check("자식 바코드 product_barcodes 생성", bcrow is not None)
+        cur.execute("select promoted_master_id from collected_products where id=%s", (parent,))
+        pmaster = cur.fetchone()[0]
+        check("자식·부모 동일 master 연결",
+              bcrow is not None and str(bcrow[0]) == str(pmaster) == str(cmaster),
+              f"child_bc={bcrow and bcrow[0]} parent={pmaster} child={cmaster}")
+        conn.rollback()
+
+
+def test_rejected_merged_child_not_promoted():
+    """머지 자식이 stage='rejected'(자격 박탈)면 부모 승격에 딸려가지 않는다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        parent = _promotable_parent(cur, SYN_BC_1)
+        child = _merged_child(cur, parent, SYN_BC_2, stage="rejected")
+        run_promotion(cur, id=str(parent), stats=Counter())
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        check("rejected 자식 미승격", cur.fetchone()[0] == "rejected")
+        cur.execute("select count(*) from product_barcodes where barcode=%s", (SYN_BC_2,))
+        check("rejected 자식 바코드 미생성", cur.fetchone()[0] == 0)
+        conn.rollback()
+
+
+def test_merged_child_barcode_conflict_held():
+    """자식 바코드가 다른 master 소유면 재링크하지 않고 conflict 보류(health-critical)."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at)
+            values ('B','other','i-other','okay','v1',now(),'t',now()) returning id""")
+        other_master = cur.fetchone()[0]
+        cur.execute("insert into product_barcodes (barcode, master_id, size) values (%s,%s,%s)",
+                    (SYN_BC_2, other_master, "99g"))
+        parent = _promotable_parent(cur, SYN_BC_1)
+        child = _merged_child(cur, parent, SYN_BC_2)
+        run_promotion(cur, id=str(parent), stats=Counter())
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        check("conflict 자식 보류(stage=conflict)", cur.fetchone()[0] == "conflict")
+        cur.execute("select master_id from product_barcodes where barcode=%s", (SYN_BC_2,))
+        check("자식 바코드 재링크 안 됨(원 master 유지)",
+              str(cur.fetchone()[0]) == str(other_master))
+        conn.rollback()
+
+
+def test_held_group_child_not_promoted():
+    """그룹이 name 불일치로 보류되면 그 멤버의 머지 자식도 승격되지 않는다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        p1 = _promotable_parent(cur, SYN_BC_1, name="이름하나")
+        p2 = _promotable_parent(cur, SYN_BC_2, name="이름다름")  # 같은 brand+ingredients, 다른 name
+        child = _merged_child(cur, p1, ean13("990000000002"))
+        stats = Counter()
+        run_promotion(cur, ids={str(p1), str(p2)}, stats=stats)
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        check("held 그룹 자식 미승격", cur.fetchone()[0] == "parsed")
+        check("그룹 보류 집계", stats.get("group_held", 0) == 2, str(dict(stats)))
+        conn.rollback()
+
+
+def test_merged_child_verified_promotes_via_parent_only():
+    """자식이 자체적으로 judged+verified 여도 부모를 통해서만 승격 —
+    중복 후보로 처리돼 stage 가 conflict 로 오염되지 않는다(순서 비의존)."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        parent = _promotable_parent(cur, SYN_BC_1)
+        child = _merged_child(cur, parent, SYN_BC_2, stage="judged",
+                              review_decision="verified", confidence="high")
+        stats = Counter()
+        run_promotion(cur, ids={str(parent), str(child)}, stats=stats)
+        cur.execute("select stage, promoted_master_id from collected_products where id=%s", (child,))
+        cstage, cmaster = cur.fetchone()
+        check("verified 자식 승격(conflict 아님)", cstage == "promoted", str(cstage))
+        cur.execute("select promoted_master_id from collected_products where id=%s", (parent,))
+        pmaster = cur.fetchone()[0]
+        check("verified 자식 부모 master 로", str(cmaster) == str(pmaster),
+              f"child={cmaster} parent={pmaster}")
+        check("중복 후보 충돌 미발생", stats.get("barcode_conflict_held", 0) == 0, str(dict(stats)))
+        conn.rollback()
+
+
 def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
               test_rollback_scope, test_rollback_shared_master,
               test_rollback_shared_barcode, test_rollback_divergent_owner, test_no_clobber,
-              test_clean_product_name]:
+              test_clean_product_name, test_merged_child_promotes_with_parent,
+              test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
+              test_held_group_child_not_promoted,
+              test_merged_child_verified_promotes_via_parent_only]:
         try:
             t()
         except Exception as e:  # noqa
