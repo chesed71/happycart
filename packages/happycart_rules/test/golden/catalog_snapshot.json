@@ -1,0 +1,470 @@
+{
+  "bad": [
+    {
+      "canonicalKey": "aspartame",
+      "reasonCode": "artificial_sweetener",
+      "aliases": [
+        "아스파탐",
+        "aspartame",
+        "E951"
+      ]
+    },
+    {
+      "canonicalKey": "sucralose",
+      "reasonCode": "artificial_sweetener",
+      "aliases": [
+        "수크랄로스",
+        "sucralose",
+        "E955"
+      ]
+    },
+    {
+      "canonicalKey": "acesulfame_k",
+      "reasonCode": "artificial_sweetener",
+      "aliases": [
+        "아세설팜칼륨",
+        "acesulfame",
+        "ace-k",
+        "acesulfame potassium",
+        "E950"
+      ]
+    },
+    {
+      "canonicalKey": "saccharin",
+      "reasonCode": "artificial_sweetener",
+      "aliases": [
+        "사카린",
+        "saccharin",
+        "E954"
+      ]
+    },
+    {
+      "canonicalKey": "red_40",
+      "reasonCode": "artificial_color",
+      "aliases": [
+        "적색40호",
+        "적색 40호",
+        "red 40",
+        "allura red",
+        "E129"
+      ]
+    },
+    {
+      "canonicalKey": "yellow_5",
+      "reasonCode": "artificial_color",
+      "aliases": [
+        "황색5호",
+        "황색 5호",
+        "yellow 5",
+        "tartrazine",
+        "E102"
+      ]
+    },
+    {
+      "canonicalKey": "yellow_6",
+      "reasonCode": "artificial_color",
+      "aliases": [
+        "황색6호",
+        "황색 6호",
+        "yellow 6",
+        "sunset yellow",
+        "E110"
+      ]
+    },
+    {
+      "canonicalKey": "blue_1",
+      "reasonCode": "artificial_color",
+      "aliases": [
+        "청색1호",
+        "청색 1호",
+        "blue 1",
+        "brilliant blue",
+        "E133"
+      ]
+    },
+    {
+      "canonicalKey": "red_3",
+      "reasonCode": "artificial_color",
+      "aliases": [
+        "적색3호",
+        "적색 3호",
+        "red 3",
+        "erythrosine",
+        "E127"
+      ]
+    },
+    {
+      "canonicalKey": "hfcs",
+      "reasonCode": "hfcs",
+      "aliases": [
+        "고과당옥수수시럽",
+        "액상과당",
+        "과당시럽",
+        "콘시럽",
+        "high fructose corn syrup",
+        "hfcs",
+        "corn syrup"
+      ]
+    },
+    {
+      "canonicalKey": "soybean_oil",
+      "reasonCode": "seed_oil",
+      "aliases": [
+        "대두유",
+        "콩기름",
+        "대두기름",
+        "soybean oil"
+      ]
+    },
+    {
+      "canonicalKey": "canola_oil",
+      "reasonCode": "seed_oil",
+      "aliases": [
+        "카놀라유",
+        "채종유",
+        "canola oil",
+        "rapeseed oil"
+      ]
+    },
+    {
+      "canonicalKey": "corn_oil",
+      "reasonCode": "seed_oil",
+      "aliases": [
+        "옥수수유",
+        "옥수수기름",
+        "corn oil"
+      ]
+    },
+    {
+      "canonicalKey": "sunflower_oil_refined",
+      "reasonCode": "seed_oil",
+      "aliases": [
+        "정제 해바라기씨유",
+        "정제해바라기씨유",
+        "refined sunflower oil"
+      ]
+    },
+    {
+      "canonicalKey": "cottonseed_oil",
+      "reasonCode": "seed_oil",
+      "aliases": [
+        "면실유",
+        "cottonseed oil"
+      ]
+    },
+    {
+      "canonicalKey": "hydrogenated",
+      "reasonCode": "hydrogenated_oil",
+      "aliases": [
+        "경화유",
+        "부분경화유",
+        "부분 경화유",
+        "hydrogenated",
+        "partially hydrogenated",
+        "트랜스지방"
+      ]
+    },
+    {
+      "canonicalKey": "bha",
+      "reasonCode": "synthetic_preservative",
+      "aliases": [
+        "bha",
+        "부틸하이드록시아니솔",
+        "butylated hydroxyanisole",
+        "E320"
+      ]
+    },
+    {
+      "canonicalKey": "bht",
+      "reasonCode": "synthetic_preservative",
+      "aliases": [
+        "bht",
+        "부틸하이드록시톨루엔",
+        "butylated hydroxytoluene",
+        "E321"
+      ]
+    },
+    {
+      "canonicalKey": "tbhq",
+      "reasonCode": "synthetic_preservative",
+      "aliases": [
+        "tbhq",
+        "터셔리부틸하이드로퀴논",
+        "tert-butylhydroquinone",
+        "E319"
+      ]
+    },
+    {
+      "canonicalKey": "sodium_nitrite",
+      "reasonCode": "nitrite",
+      "aliases": [
+        "아질산나트륨",
+        "sodium nitrite",
+        "E250"
+      ]
+    },
+    {
+      "canonicalKey": "sodium_nitrate",
+      "reasonCode": "nitrite",
+      "aliases": [
+        "sodium nitrate",
+        "E251"
+      ]
+    },
+    {
+      "canonicalKey": "carrageenan",
+      "reasonCode": "carrageenan",
+      "aliases": [
+        "카라기난",
+        "carrageenan",
+        "E407"
+      ]
+    },
+    {
+      "canonicalKey": "polysorbate_80",
+      "reasonCode": "emulsifier_concern",
+      "aliases": [
+        "폴리소르베이트80",
+        "폴리소르베이트 80",
+        "polysorbate 80",
+        "E433"
+      ]
+    },
+    {
+      "canonicalKey": "datem",
+      "reasonCode": "emulsifier_concern",
+      "aliases": [
+        "datem",
+        "다템"
+      ]
+    },
+    {
+      "canonicalKey": "mono_diglycerides",
+      "reasonCode": "emulsifier_concern",
+      "aliases": [
+        "모노글리세리드",
+        "디글리세리드",
+        "mono- and diglycerides",
+        "monoglycerides",
+        "diglycerides",
+        "E471"
+      ]
+    },
+    {
+      "canonicalKey": "natural_flavors_opaque",
+      "reasonCode": "opaque_flavor",
+      "aliases": [
+        "natural flavors",
+        "천연향료"
+      ]
+    },
+    {
+      "canonicalKey": "artificial_flavors",
+      "reasonCode": "opaque_flavor",
+      "aliases": [
+        "합성착향료",
+        "인공향료",
+        "artificial flavors",
+        "artificial flavor"
+      ]
+    },
+    {
+      "canonicalKey": "bleached_flour",
+      "reasonCode": "refined_flour",
+      "aliases": [
+        "표백 밀가루",
+        "표백밀가루",
+        "bleached flour"
+      ]
+    },
+    {
+      "canonicalKey": "enriched_flour",
+      "reasonCode": "refined_flour",
+      "aliases": [
+        "강화 밀가루",
+        "강화밀가루",
+        "enriched flour"
+      ]
+    },
+    {
+      "canonicalKey": "potassium_bromate",
+      "reasonCode": "bromate",
+      "aliases": [
+        "브롬산칼륨",
+        "potassium bromate",
+        "E924"
+      ]
+    },
+    {
+      "canonicalKey": "maltodextrin",
+      "reasonCode": "maltodextrin",
+      "aliases": [
+        "말토덱스트린",
+        "maltodextrin",
+        "E1400"
+      ]
+    },
+    {
+      "canonicalKey": "sugar",
+      "reasonCode": "refined_sugar",
+      "aliases": [
+        "설탕"
+      ]
+    }
+  ],
+  "good": [
+    {
+      "canonicalKey": "extra_virgin_olive_oil",
+      "reasonCode": "clean_fat",
+      "aliases": [
+        "엑스트라버진 올리브유",
+        "엑스트라 버진 올리브유",
+        "evoo",
+        "extra virgin olive oil"
+      ]
+    },
+    {
+      "canonicalKey": "avocado_oil",
+      "reasonCode": "clean_fat",
+      "aliases": [
+        "아보카도 오일",
+        "아보카도오일",
+        "avocado oil"
+      ]
+    },
+    {
+      "canonicalKey": "coconut_oil",
+      "reasonCode": "clean_fat",
+      "aliases": [
+        "코코넛 오일",
+        "코코넛오일",
+        "coconut oil"
+      ]
+    },
+    {
+      "canonicalKey": "grass_fed_butter",
+      "reasonCode": "clean_fat",
+      "aliases": [
+        "그래스페드 버터",
+        "그래스 페드 버터",
+        "grass-fed butter",
+        "grass fed butter",
+        "기 버터",
+        "ghee"
+      ]
+    },
+    {
+      "canonicalKey": "honey",
+      "reasonCode": "natural_sweetener",
+      "aliases": [
+        "꿀",
+        "honey"
+      ]
+    },
+    {
+      "canonicalKey": "maple_syrup",
+      "reasonCode": "natural_sweetener",
+      "aliases": [
+        "메이플시럽",
+        "메이플 시럽",
+        "maple syrup"
+      ]
+    },
+    {
+      "canonicalKey": "date",
+      "reasonCode": "natural_sweetener",
+      "aliases": [
+        "대추야자",
+        "dates",
+        "medjool"
+      ]
+    },
+    {
+      "canonicalKey": "sea_salt",
+      "reasonCode": "natural_salt",
+      "aliases": [
+        "천일염",
+        "sea salt"
+      ]
+    },
+    {
+      "canonicalKey": "whole_grain",
+      "reasonCode": "whole_grain",
+      "aliases": [
+        "통곡물",
+        "통밀",
+        "whole grain",
+        "whole wheat"
+      ]
+    },
+    {
+      "canonicalKey": "sprouted_grain",
+      "reasonCode": "whole_grain",
+      "aliases": [
+        "발아곡물",
+        "sprouted grain",
+        "sprouted wheat"
+      ]
+    },
+    {
+      "canonicalKey": "kimchi",
+      "reasonCode": "fermented",
+      "aliases": [
+        "김치",
+        "kimchi"
+      ]
+    },
+    {
+      "canonicalKey": "kefir",
+      "reasonCode": "fermented",
+      "aliases": [
+        "케피어",
+        "kefir"
+      ]
+    },
+    {
+      "canonicalKey": "sauerkraut",
+      "reasonCode": "fermented",
+      "aliases": [
+        "사우어크라우트",
+        "sauerkraut"
+      ]
+    },
+    {
+      "canonicalKey": "kombucha",
+      "reasonCode": "fermented",
+      "aliases": [
+        "콤부차",
+        "kombucha"
+      ]
+    },
+    {
+      "canonicalKey": "organic",
+      "reasonCode": "organic",
+      "aliases": [
+        "유기농",
+        "organic"
+      ]
+    },
+    {
+      "canonicalKey": "pasture_raised_egg",
+      "reasonCode": "pasture_raised",
+      "aliases": [
+        "방목 달걀",
+        "방목달걀",
+        "pasture-raised egg",
+        "pasture raised egg",
+        "free-range egg"
+      ]
+    },
+    {
+      "canonicalKey": "grass_fed_beef",
+      "reasonCode": "grass_fed",
+      "aliases": [
+        "그래스페드 소고기",
+        "grass-fed beef",
+        "grass fed beef"
+      ]
+    }
+  ]
+}
