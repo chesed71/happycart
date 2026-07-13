@@ -195,9 +195,16 @@ void _writePart({
   file.writeAsStringSync(buffer.toString());
 }
 
-/// 작은따옴표 문자열 리터럴로 방출 — 내부 작은따옴표·역슬래시는 방어적으로 이스케이프.
+/// 작은따옴표 문자열 리터럴로 방출 — 역슬래시·작은따옴표·`$`(보간)·제어문자를
+/// 방어적으로 이스케이프한다. 역슬래시를 먼저 치환해 이중 이스케이프를 피한다.
 String _quote(String value) {
-  final escaped = value.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll(r'$', r'\$')
+      .replaceAll("'", r"\'")
+      .replaceAll('\n', r'\n')
+      .replaceAll('\r', r'\r')
+      .replaceAll('\t', r'\t');
   return "'$escaped'";
 }
 
