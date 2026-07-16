@@ -4,7 +4,8 @@ import 'good_ingredients.dart';
 /// 룰 버전 (스펙 §5.1).
 ///
 /// v1.1.0 (2026-05-22): refined_sugar 카테고리 신설 — `설탕` alias 1개.
-const String ruleVersion = 'v1.1.0';
+/// v1.2.0 (2026-07-16): 2a 검토완료 승인 alias 12건 반영 + 황색 KR/US 번호 플립 교정.
+const String ruleVersion = 'v1.2.0';
 
 /// 최종 평가 결과 (스펙 §5).
 ///

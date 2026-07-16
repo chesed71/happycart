@@ -233,7 +233,7 @@ void main() {
     });
   });
 
-  test('ruleVersion is v1.1.0', () {
-    expect(ruleVersion, 'v1.1.0');
+  test('ruleVersion is v1.2.0', () {
+    expect(ruleVersion, 'v1.2.0');
   });
 }
