@@ -117,4 +117,50 @@ void main() {
           isNotEmpty);
     });
   });
+
+  group('appendApproved', () {
+    test('proposedAlias 원문을 해당 엔트리 aliases 뒤에 append', () {
+      final cat = _catalog();
+      final out = appendApproved(cat, [_cand('red_40', '식용색소적색제40호')]);
+      final red = (out['bad'] as List)
+          .firstWhere((e) => e['canonicalKey'] == 'red_40') as Map;
+      expect((red['aliases'] as List).last, '식용색소적색제40호');
+      // 원본 카탈로그는 불변(깊은 복사)
+      final origRed = (cat['bad'] as List)
+          .firstWhere((e) => e['canonicalKey'] == 'red_40') as Map;
+      expect((origRed['aliases'] as List).contains('식용색소적색제40호'), isFalse);
+    });
+
+    test('normalizedPreview 가 아니라 proposedAlias 원문(공백 유지)을 반영', () {
+      final out = appendApproved(_catalog(), [
+        {
+          'canonicalKey': 'red_40',
+          'reasonCode': 'artificial_color',
+          'proposedAlias': '식용색소 적색 제40호',
+          'normalizedPreview': '식용색소적색제40호',
+          'reviewerStatus': '승인',
+        }
+      ]);
+      final red = (out['bad'] as List)
+          .firstWhere((e) => e['canonicalKey'] == 'red_40') as Map;
+      expect((red['aliases'] as List).last, '식용색소 적색 제40호');
+    });
+
+    test('이미 존재하는 alias 는 중복 추가 안 함(멱등)', () {
+      final once = appendApproved(_catalog(), [_cand('red_40', '식용색소적색제40호')]);
+      final twice = appendApproved(once, [_cand('red_40', '식용색소적색제40호')]);
+      final red = (twice['bad'] as List)
+          .firstWhere((e) => e['canonicalKey'] == 'red_40') as Map;
+      final count =
+          (red['aliases'] as List).where((a) => a == '식용색소적색제40호').length;
+      expect(count, 1);
+    });
+
+    test('다른 엔트리·순서 불변', () {
+      final out = appendApproved(_catalog(), [_cand('red_40', '식용색소적색제40호')]);
+      final yellow = (out['bad'] as List)
+          .firstWhere((e) => e['canonicalKey'] == 'yellow_6') as Map;
+      expect(yellow['aliases'], ['황색6호', 'sunset yellow']);
+    });
+  });
 }
