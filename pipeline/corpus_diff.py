@@ -92,6 +92,11 @@ def fetch_masters(conn) -> list[dict]:
     ]
 
 
+def select_fetch(target: str):
+    """--target 에 따라 모집단 조회 함수 선택 (masters=서비스 상품, collected=기본)."""
+    return fetch_masters if target == "masters" else fetch_corpus
+
+
 def catalog_sha256(catalog_path: str) -> str:
     """카탈로그 파일 raw bytes 의 SHA-256 (lowercase hex) — 매니페스트 대조용."""
     with open(catalog_path, "rb") as f:
@@ -219,7 +224,7 @@ def main():
     if args.phase == "before":
         # 토큰 스냅샷 1회 materialize (DB) + 반영 전 룰로 판정.
         with connect(args.dsn) as conn:
-            rows = fetch_masters(conn) if args.target == "masters" else fetch_corpus(conn)
+            rows = select_fetch(args.target)(conn)
         write_snapshot(rows, args.snapshot, args.catalog, app_dir)
         results = _judge_phase(app_dir, args.snapshot, args.result_out)
         print(f"before[{args.target}]: {len(rows)}행 materialize → {args.snapshot}, "

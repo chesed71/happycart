@@ -18,9 +18,6 @@ import psycopg
 from common import dsn
 from test_invariants import ean13
 
-# judge.resolve_app_dir 의 기본값과 동일해야 한다 (현재 머신 실경로).
-DEFAULT_APP_DIR = "/Users/ronen/Project/HappyCart/happycart"
-
 # (name, ok) — ok=True PASS / ok=False FAIL / ok=None SKIP
 results: list[tuple[str, bool | None, str]] = []
 
@@ -62,6 +59,7 @@ def test_resolve_app_dir_precedence():
 def test_write_snapshot_shape():
     """write_snapshot: rows + 메타(catalog sha256·git ref·count)를 JSON 으로 저장."""
     import corpus_diff
+    import judge
 
     with tempfile.TemporaryDirectory() as d:
         catalog_path = os.path.join(d, "cat.json")
@@ -72,7 +70,8 @@ def test_write_snapshot_shape():
         rows = [{"ref": "1", "tokens": ["밀가루"], "prev_verdict": "okay",
                  "prev_bad": [], "prev_reason": []}]
         snap_path = os.path.join(d, "snap.json")
-        corpus_diff.write_snapshot(rows, snap_path, catalog_path, DEFAULT_APP_DIR)
+        # 실제 repo 경로(judge 파생 기본값)를 써야 git_head 가 실 SHA 를 반환한다.
+        corpus_diff.write_snapshot(rows, snap_path, catalog_path, judge.HAPPYCART_APP_DIR)
         with open(snap_path, encoding="utf-8") as f:
             snap = json.load(f)
         check("write_snapshot: catalog_sha256 일치",
@@ -80,8 +79,11 @@ def test_write_snapshot_shape():
               f"{snap.get('catalog_sha256')} != {expected_sha}")
         check("write_snapshot: count", snap.get("count") == 1)
         check("write_snapshot: rows 보존", snap.get("rows") == rows)
-        check("write_snapshot: git_ref 문자열",
-              isinstance(snap.get("git_ref"), str) and len(snap["git_ref"]) > 0)
+        # git_head 실패 시 'unknown' 이므로 실 SHA(40 hex)인지까지 확인(잘못된 경로 방지).
+        git_ref = snap.get("git_ref")
+        check("write_snapshot: git_ref 실 SHA",
+              isinstance(git_ref, str) and git_ref != "unknown" and len(git_ref) == 40,
+              f"git_ref={git_ref!r}")
 
 
 def test_fetch_corpus_shape():
@@ -159,6 +161,18 @@ def test_fetch_masters_shape():
                                        "prev_bad", "prev_good", "prev_reason")))
 
 
+def test_select_fetch_dispatch():
+    """--target 이 올바른 모집단 조회 함수로 dispatch 되는지 (DB 불필요)."""
+    import corpus_diff
+
+    check("select_fetch: masters→fetch_masters",
+          corpus_diff.select_fetch("masters") is corpus_diff.fetch_masters)
+    check("select_fetch: collected→fetch_corpus",
+          corpus_diff.select_fetch("collected") is corpus_diff.fetch_corpus)
+    check("select_fetch: 기타→fetch_corpus(기본)",
+          corpus_diff.select_fetch("xxx") is corpus_diff.fetch_corpus)
+
+
 def test_diff_results_detects_array_change():
     """diff_results: verdict 불변이어도 검출배열 변화를 포착, newly_not_okay 판정."""
     import corpus_diff
@@ -211,6 +225,7 @@ def main():
         test_write_snapshot_shape,
         test_fetch_corpus_shape,
         test_fetch_masters_shape,
+        test_select_fetch_dispatch,
         test_diff_results_detects_array_change,
     ]
     for t in tests:
