@@ -7,8 +7,16 @@ DB 불필요한 순수 함수는 항상 실행하고, DB 필요한 함수는 접
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
+import tempfile
+
+import psycopg
+
+from common import dsn
+from test_invariants import ean13
 
 # judge.resolve_app_dir 의 기본값과 동일해야 한다 (현재 머신 실경로).
 DEFAULT_APP_DIR = "/Users/ronen/Project/HappyCart/happycart"
@@ -49,9 +57,92 @@ def test_resolve_app_dir_precedence():
             os.environ["HAPPYCART_APP_DIR"] = saved
 
 
+def test_write_snapshot_shape():
+    """write_snapshot: rows + 메타(catalog sha256·git ref·count)를 JSON 으로 저장."""
+    import corpus_diff
+
+    with tempfile.TemporaryDirectory() as d:
+        catalog_path = os.path.join(d, "cat.json")
+        payload = b'{"schemaVersion":1,"bad":[],"good":[]}'
+        with open(catalog_path, "wb") as f:
+            f.write(payload)
+        expected_sha = hashlib.sha256(payload).hexdigest()
+        rows = [{"ref": "1", "tokens": ["밀가루"], "prev_verdict": "okay",
+                 "prev_bad": [], "prev_reason": []}]
+        snap_path = os.path.join(d, "snap.json")
+        corpus_diff.write_snapshot(rows, snap_path, catalog_path, DEFAULT_APP_DIR)
+        with open(snap_path, encoding="utf-8") as f:
+            snap = json.load(f)
+        check("write_snapshot: catalog_sha256 일치",
+              snap.get("catalog_sha256") == expected_sha,
+              f"{snap.get('catalog_sha256')} != {expected_sha}")
+        check("write_snapshot: count", snap.get("count") == 1)
+        check("write_snapshot: rows 보존", snap.get("rows") == rows)
+        check("write_snapshot: git_ref 문자열",
+              isinstance(snap.get("git_ref"), str) and len(snap["git_ref"]) > 0)
+
+
+def test_fetch_corpus_shape():
+    """fetch_corpus: 대상 행을 ref/tokens/prev_* 로 반환하고 빈 토큰은 제외 (DB 필요)."""
+    import corpus_diff
+
+    try:
+        conn = psycopg.connect(dsn())
+    except psycopg.Error as e:
+        skip("test_fetch_corpus_shape", f"DB 없음: {e}")
+        return
+    with conn, conn.cursor() as cur:
+        cur.execute("begin")
+        # 대상 행: stage=judged, 비어있지 않은 토큰, 비-게이트 source(coupang)
+        cur.execute(
+            """
+            insert into collected_products
+              (source, source_ref, raw, brand, name, size, category, barcode,
+               ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
+               bad_ingredients_detected, verdict_reason_codes, computed_at, stage)
+            values ('coupang', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s,
+                    '밀가루, 적색40호', 'high', '{밀가루,적색40호}',
+                    'not_okay'::verdict_enum, 'v1.1.0',
+                    '{red_40}', '{artificial_color}', now(), 'judged')
+            returning id
+            """,
+            ("cd-test-target", ean13("990000000010")),
+        )
+        target_id = str(cur.fetchone()[0])
+        # 제외 행: 빈 토큰
+        cur.execute(
+            """
+            insert into collected_products
+              (source, source_ref, raw, brand, name, size, category, barcode,
+               ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
+               computed_at, stage)
+            values ('coupang', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s,
+                    '', 'high', '{}', 'okay'::verdict_enum, 'v1.1.0', now(), 'judged')
+            returning id
+            """,
+            ("cd-test-empty", ean13("990000000011")),
+        )
+        empty_id = str(cur.fetchone()[0])
+
+        rows = corpus_diff.fetch_corpus(conn)
+        by_ref = {r["ref"]: r for r in rows}
+        check("fetch_corpus: 대상 행 포함", target_id in by_ref)
+        if target_id in by_ref:
+            r = by_ref[target_id]
+            check("fetch_corpus: tokens", r["tokens"] == ["밀가루", "적색40호"],
+                  f"tokens={r['tokens']}")
+            check("fetch_corpus: prev_verdict", r["prev_verdict"] == "not_okay")
+            check("fetch_corpus: prev_bad", r["prev_bad"] == ["red_40"])
+            check("fetch_corpus: prev_reason", r["prev_reason"] == ["artificial_color"])
+        check("fetch_corpus: 빈 토큰 행 제외", empty_id not in by_ref)
+        conn.rollback()
+
+
 def main():
     tests = [
         test_resolve_app_dir_precedence,
+        test_write_snapshot_shape,
+        test_fetch_corpus_shape,
     ]
     for t in tests:
         try:
