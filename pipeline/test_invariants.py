@@ -360,6 +360,34 @@ def test_rollback_divergent_owner():
         conn.rollback()
 
 
+def test_rollback_preserves_merged_child():
+    """rollback: 머지 자식(promoted∧non-verified)은 되돌리지 않는다.
+
+    게이트 도입 후 non-verified promoted 는 '사람이 바코드 합친 자식'뿐이다(부모는
+    verified 게이트 통과). pre-gate 미검수 승격(merged_into 없음)만 롤백 대상이어야 하며,
+    의도된 머지 자식은 stage·바코드 링크가 보존돼야 한다(PR #12 MEDIUM 대응)."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        parent = _promotable_parent(cur, SYN_BC_1)
+        child = _merged_child(cur, parent, SYN_BC_2)  # stage=parsed, needs_fix
+        run_promotion(cur, id=str(parent), stats=Counter())
+        # 사전조건: 자식이 실제로 부모와 동반 승격됐는지
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        check("사전: 머지 자식 동반 승격", cur.fetchone()[0] == "promoted")
+        # 실제 rollback 함수 실행
+        cur.execute("select public.rollback_ungated_promotions()")
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        cstage = cur.fetchone()[0]
+        check("rollback: 머지 자식 promoted 유지", cstage == "promoted", str(cstage))
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (SYN_BC_2,))
+        check("rollback: 머지 자식 바코드 링크 보존", cur.fetchone()[0] is True)
+        cur.execute("select stage from collected_products where id=%s", (parent,))
+        check("rollback: verified 부모 promoted 유지", cur.fetchone()[0] == "promoted")
+        conn.rollback()
+
+
 def test_no_clobber():
     """extract upsert: reviewed_at 있는 행은 갱신 제외 (UPSERT_SQL where 절 검증)."""
     from common import UPSERT_SQL
@@ -521,7 +549,8 @@ def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
               test_rollback_scope, test_rollback_shared_master,
-              test_rollback_shared_barcode, test_rollback_divergent_owner, test_no_clobber,
+              test_rollback_shared_barcode, test_rollback_divergent_owner,
+              test_rollback_preserves_merged_child, test_no_clobber,
               test_clean_product_name, test_merged_child_promotes_with_parent,
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
               test_held_group_child_not_promoted,

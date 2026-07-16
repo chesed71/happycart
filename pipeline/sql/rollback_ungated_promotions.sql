@@ -24,13 +24,17 @@ begin
     raise notice 'preserving % verified promotion(s) — rollback only touches non-verified', v_verified;
   end if;
 
-  -- 롤백 대상 = non-verified promoted 행. 각 행이 만든 서비스 바코드는 collected.barcode 와
+  -- 롤백 대상 = pre-gate 미검수 승격 행. 각 행이 만든 서비스 바코드는 collected.barcode 와
   -- 동일하다 (바코드는 product_barcodes PK라 1:1).
+  -- 머지 자식(raw.merged_into 있음)은 제외 — 게이트 도입 후 non-verified promoted 는
+  -- '사람이 바코드 합친 자식'(부모의 verified 판단으로 동반 승격, 검수필드 미변경)뿐이라
+  -- 정당한 상태다. 롤백은 merged_into 없는 pre-gate 미검수 승격만 되돌린다(§8-1 게이트 이전분).
   drop table if exists _rb;
   create temp table _rb as
     select id, barcode, promoted_master_id
     from public.collected_products
-    where stage = 'promoted' and review_decision is distinct from 'verified';
+    where stage = 'promoted' and review_decision is distinct from 'verified'
+      and (raw->>'merged_into') is null;
 
   -- 1) 대상 행을 judged로 복원 (FK 참조부터 끊는다)
   update public.collected_products
