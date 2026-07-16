@@ -545,6 +545,46 @@ def test_merged_child_verified_promotes_via_parent_only():
         conn.rollback()
 
 
+def test_dryrun_counts_merged_child_barcodes():
+    """dry-run 바코드 카운트가 머지 자식까지 포함한다(LOW: 자식 과소보고 방지).
+
+    실제 실행은 부모+머지 자식 바코드를 붙이는데 dry-run 이 부모만 세면 미리보기가
+    실측과 어긋난다. 자식 수를 더해 상한 근사로 맞춘다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        parent = _promotable_parent(cur, SYN_BC_1)
+        _merged_child(cur, parent, SYN_BC_2)  # parsed, needs_fix
+        pm, pb = run_promotion(cur, id=str(parent), dry_run=True, stats=Counter())
+        check("dry-run master=1", pm == 1, f"pm={pm}")
+        check("dry-run 바코드=부모+자식(2)", pb == 2, f"pb={pb}")
+        # dry-run 은 쓰지 않는다 — 승격 흔적이 없어야
+        cur.execute("select stage from collected_products where id=%s", (parent,))
+        check("dry-run 미기록(부모 judged 유지)", cur.fetchone()[0] == "judged")
+        conn.rollback()
+
+
+def test_held_counts_scoped_to_ids():
+    """held 카운트가 --id/--ids 스코프를 반영한다(LOW: 전역 카운트 오도 방지).
+
+    스코프 승격 시 held_not_reviewed 가 전역 judged 를 세면 운영자를 오도한다.
+    스코프된 id 집합으로 한정해야 한다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        # 미검수 judged 행 2개(둘 다 held: not_reviewed). 실 DB 에 다른 held 가 있어도
+        # 스코프가 걸리면 대상 id 만 세야 하므로 결정적.
+        h1 = _fixture(cur, stage="judged", barcode=SYN_BC_1, review_decision=None)
+        _fixture(cur, stage="judged", barcode=SYN_BC_2, review_decision=None)
+        stats = Counter()
+        run_promotion(cur, id=str(h1), dry_run=True, stats=stats)
+        check("held 스코프=1(전역 아님)", stats["held_not_reviewed"] == 1,
+              f'held_not_reviewed={stats["held_not_reviewed"]}')
+        conn.rollback()
+
+
 def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
@@ -554,7 +594,8 @@ def main():
               test_clean_product_name, test_merged_child_promotes_with_parent,
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
               test_held_group_child_not_promoted,
-              test_merged_child_verified_promotes_via_parent_only]:
+              test_merged_child_verified_promotes_via_parent_only,
+              test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids]:
         try:
             t()
         except Exception as e:  # noqa

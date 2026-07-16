@@ -139,6 +139,14 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
         from collected_products where stage = 'judged'
     """
     held_params = []
+    # 후보와 동일하게 스코프(id/ids/source/source_ref)를 반영 — 스코프 승격 시 held
+    # 카운트가 전역 judged 를 세어 운영자를 오도하지 않도록.
+    if id:
+        held_sql += " and id = %s::uuid"
+        held_params.append(id)
+    if id_set is not None:
+        held_sql += " and id = any(%s::uuid[])"
+        held_params.append(list(id_set))
     if source:
         held_sql += " and source = %s"
         held_params.append(source)
@@ -175,9 +183,20 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             continue
 
         if dry_run:
-            # 미리보기 — 머지 자식 수는 세지 않으므로 실제 실행 시 바코드가 더 붙을 수 있다.
+            # 미리보기 — 머지 자식 바코드까지 세어 실측(부모+자식)에 근접시킨다.
+            # 충돌/중복은 예측 불가라 실제 붙는 바코드 수의 상한 근사다.
             promoted_masters += 1
-            promoted_barcodes += len(members)
+            child_bc = 0
+            for m in members:
+                cur.execute("""
+                    select count(*) from collected_products
+                    where (raw->>'merged_into') = %s
+                      and (raw->>'deleted_at') is null
+                      and stage not in ('promoted', 'rejected')
+                      and barcode is not null
+                """, (str(m[0]),))
+                child_bc += cur.fetchone()[0]
+            promoted_barcodes += len(members) + child_bc
             continue
 
         rep = members[0]
