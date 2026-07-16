@@ -26,27 +26,27 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'red_40',
     reasonCode: 'artificial_color',
-    aliases: ['적색40호', '적색 40호', 'red 40', 'allura red', 'E129'],
+    aliases: ['적색40호', '적색 40호', 'red 40', 'allura red', 'E129', '식용색소적색제40호'],
   ),
   IngredientEntry(
     canonicalKey: 'yellow_5',
     reasonCode: 'artificial_color',
-    aliases: ['황색5호', '황색 5호', 'yellow 5', 'tartrazine', 'E102'],
+    aliases: ['황색5호', '황색 5호', 'yellow 5', 'tartrazine', 'E102', '황색제4호'],
   ),
   IngredientEntry(
     canonicalKey: 'yellow_6',
     reasonCode: 'artificial_color',
-    aliases: ['황색6호', '황색 6호', 'yellow 6', 'sunset yellow', 'E110'],
+    aliases: ['황색6호', '황색 6호', 'yellow 6', 'sunset yellow', 'E110', '황색제5호'],
   ),
   IngredientEntry(
     canonicalKey: 'blue_1',
     reasonCode: 'artificial_color',
-    aliases: ['청색1호', '청색 1호', 'blue 1', 'brilliant blue', 'E133'],
+    aliases: ['청색1호', '청색 1호', 'blue 1', 'brilliant blue', 'E133', '청색제1호'],
   ),
   IngredientEntry(
     canonicalKey: 'red_3',
     reasonCode: 'artificial_color',
-    aliases: ['적색3호', '적색 3호', 'red 3', 'erythrosine', 'E127'],
+    aliases: ['적색3호', '적색 3호', 'red 3', 'erythrosine', 'E127', '적색제3호'],
   ),
   IngredientEntry(
     canonicalKey: 'hfcs',
@@ -59,6 +59,7 @@ const List<IngredientEntry> badIngredientCatalog = [
       'high fructose corn syrup',
       'hfcs',
       'corn syrup',
+      '이성화당',
     ],
   ),
   IngredientEntry(
@@ -84,7 +85,7 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'cottonseed_oil',
     reasonCode: 'seed_oil',
-    aliases: ['면실유', 'cottonseed oil'],
+    aliases: ['면실유', 'cottonseed oil', '목화씨앗유', '목화씨유'],
   ),
   IngredientEntry(
     canonicalKey: 'hydrogenated',
@@ -96,6 +97,9 @@ const List<IngredientEntry> badIngredientCatalog = [
       'hydrogenated',
       'partially hydrogenated',
       '트랜스지방',
+      '경화코코넛오일',
+      '경화코코넛유',
+      '경화팜핵유',
     ],
   ),
   IngredientEntry(
@@ -136,7 +140,7 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'datem',
     reasonCode: 'emulsifier_concern',
-    aliases: ['datem', '다템'],
+    aliases: ['datem', '다템', '글리세린디아세틸주석산지방산에스테르'],
   ),
   IngredientEntry(
     canonicalKey: 'mono_diglycerides',

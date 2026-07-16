@@ -46,7 +46,8 @@
         "적색 40호",
         "red 40",
         "allura red",
-        "E129"
+        "E129",
+        "식용색소적색제40호"
       ]
     },
     {
@@ -57,7 +58,8 @@
         "황색 5호",
         "yellow 5",
         "tartrazine",
-        "E102"
+        "E102",
+        "황색제4호"
       ]
     },
     {
@@ -68,7 +70,8 @@
         "황색 6호",
         "yellow 6",
         "sunset yellow",
-        "E110"
+        "E110",
+        "황색제5호"
       ]
     },
     {
@@ -79,7 +82,8 @@
         "청색 1호",
         "blue 1",
         "brilliant blue",
-        "E133"
+        "E133",
+        "청색제1호"
       ]
     },
     {
@@ -90,7 +94,8 @@
         "적색 3호",
         "red 3",
         "erythrosine",
-        "E127"
+        "E127",
+        "적색제3호"
       ]
     },
     {
@@ -103,7 +108,8 @@
         "콘시럽",
         "high fructose corn syrup",
         "hfcs",
-        "corn syrup"
+        "corn syrup",
+        "이성화당"
       ]
     },
     {
@@ -149,7 +155,9 @@
       "reasonCode": "seed_oil",
       "aliases": [
         "면실유",
-        "cottonseed oil"
+        "cottonseed oil",
+        "목화씨앗유",
+        "목화씨유"
       ]
     },
     {
@@ -161,7 +169,10 @@
         "부분 경화유",
         "hydrogenated",
         "partially hydrogenated",
-        "트랜스지방"
+        "트랜스지방",
+        "경화코코넛오일",
+        "경화코코넛유",
+        "경화팜핵유"
       ]
     },
     {
@@ -235,7 +246,8 @@
       "reasonCode": "emulsifier_concern",
       "aliases": [
         "datem",
-        "다템"
+        "다템",
+        "글리세린디아세틸주석산지방산에스테르"
       ]
     },
     {
