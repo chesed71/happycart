@@ -21,17 +21,14 @@ void main() {
   group('computeVerdict — okay path', () {
     test('단순 자연 원재료만 있으면 okay', () {
       final result = computeVerdict(
-        const IngredientInput(
-          tokens: ['엑스트라버진 올리브유', '천일염', '꿀'],
-        ),
+        const IngredientInput(tokens: ['엑스트라버진 올리브유', '천일염', '꿀']),
       );
       expect(result.verdict, Verdict.okay);
       expect(result.badMatches, isEmpty);
-      expect(result.goodCanonicalKeys, containsAll(<String>[
-        'extra_virgin_olive_oil',
-        'sea_salt',
-        'honey',
-      ]));
+      expect(
+        result.goodCanonicalKeys,
+        containsAll(<String>['extra_virgin_olive_oil', 'sea_salt', 'honey']),
+      );
     });
 
     test('알 수 없는 자연 원재료는 okay (false positive 방지)', () {
@@ -60,10 +57,10 @@ void main() {
         ),
       );
       expect(result.verdict, Verdict.notOkay);
-      expect(result.badCanonicalKeys, containsAll(<String>[
-        'hfcs',
-        'natural_flavors_opaque',
-      ]));
+      expect(
+        result.badCanonicalKeys,
+        containsAll(<String>['hfcs', 'natural_flavors_opaque']),
+      );
     });
 
     test('대두유 / 카놀라유 — seed oil 카테고리로 매칭', () {
@@ -72,23 +69,21 @@ void main() {
       );
       expect(result.verdict, Verdict.notOkay);
       expect(result.reasonCodes, ['seed_oil']);
-      expect(result.badCanonicalKeys, containsAll(<String>[
-        'soybean_oil',
-        'canola_oil',
-      ]));
+      expect(
+        result.badCanonicalKeys,
+        containsAll(<String>['soybean_oil', 'canola_oil']),
+      );
     });
 
     test('합성 보존제 + 색소 — reason code 두 개 누적', () {
       final result = computeVerdict(
-        const IngredientInput(
-          tokens: ['밀가루', '정제염', 'BHA', '황색5호'],
-        ),
+        const IngredientInput(tokens: ['밀가루', '정제염', 'BHA', '황색5호']),
       );
       expect(result.verdict, Verdict.notOkay);
-      expect(result.reasonCodes, containsAll(<String>[
-        'synthetic_preservative',
-        'artificial_color',
-      ]));
+      expect(
+        result.reasonCodes,
+        containsAll(<String>['synthetic_preservative', 'artificial_color']),
+      );
     });
 
     test('설탕 — refined_sugar 카테고리로 매칭 (v1.1.0)', () {
@@ -101,9 +96,7 @@ void main() {
     });
 
     test('백설탕 / 흑설탕 — substring 매칭 (v1.1.0)', () {
-      final result = computeVerdict(
-        const IngredientInput(tokens: ['백설탕']),
-      );
+      final result = computeVerdict(const IngredientInput(tokens: ['백설탕']));
       expect(result.verdict, Verdict.notOkay);
       expect(result.badCanonicalKeys, ['sugar']);
     });
@@ -157,30 +150,24 @@ void main() {
         ),
       );
       expect(result.verdict, Verdict.notOkay);
-      expect(result.badCanonicalKeys, containsAll(<String>[
-        'mono_diglycerides',
-        'polysorbate_80',
-      ]));
+      expect(
+        result.badCanonicalKeys,
+        containsAll(<String>['mono_diglycerides', 'polysorbate_80']),
+      );
     });
 
     test('E-number 단어 경계 — E1400 ≠ E14000', () {
-      final hit = computeVerdict(
-        const IngredientInput(tokens: ['E1400']),
-      );
+      final hit = computeVerdict(const IngredientInput(tokens: ['E1400']));
       expect(hit.verdict, Verdict.notOkay);
       expect(hit.badCanonicalKeys, ['maltodextrin']);
 
-      final miss = computeVerdict(
-        const IngredientInput(tokens: ['E14000']),
-      );
+      final miss = computeVerdict(const IngredientInput(tokens: ['E14000']));
       expect(miss.verdict, Verdict.okay);
       expect(miss.badMatches, isEmpty);
     });
 
     test('Korean 천연향료 vs 영문 natural flavors — 둘 다 매칭', () {
-      final kr = computeVerdict(
-        const IngredientInput(tokens: ['정제수', '천연향료']),
-      );
+      final kr = computeVerdict(const IngredientInput(tokens: ['정제수', '천연향료']));
       expect(kr.badCanonicalKeys, ['natural_flavors_opaque']);
 
       final en = computeVerdict(
@@ -193,9 +180,7 @@ void main() {
   group('good ingredients alongside bad', () {
     test('Not Okay 상태에서도 good chip 누적', () {
       final result = computeVerdict(
-        const IngredientInput(
-          tokens: ['엑스트라버진 올리브유', '아스파탐'],
-        ),
+        const IngredientInput(tokens: ['엑스트라버진 올리브유', '아스파탐']),
       );
       expect(result.verdict, Verdict.notOkay);
       expect(result.badCanonicalKeys, ['aspartame']);
@@ -219,7 +204,21 @@ void main() {
     });
   });
 
-  test('ruleVersion is v1.1.0', () {
-    expect(ruleVersion, 'v1.1.0');
+  group('computeVerdict — 황색 KR/US 번호 교정(플립)', () {
+    // 한국 황색4호=타트라진=yellow_5, 황색5호=선셋=yellow_6 (근거: evidence_yellow_colors.md)
+    test('황색5호(선셋)는 yellow_6 로 검출, yellow_5 아님', () {
+      final r = computeVerdict(const IngredientInput(tokens: ['정제수', '황색5호']));
+      expect(r.badCanonicalKeys, contains('yellow_6'));
+      expect(r.badCanonicalKeys, isNot(contains('yellow_5')));
+    });
+
+    test('황색4호(타트라진)는 yellow_5 로 검출', () {
+      final r = computeVerdict(const IngredientInput(tokens: ['정제수', '황색4호']));
+      expect(r.badCanonicalKeys, contains('yellow_5'));
+    });
+  });
+
+  test('ruleVersion is v1.2.0', () {
+    expect(ruleVersion, 'v1.2.0');
   });
 }

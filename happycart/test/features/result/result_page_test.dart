@@ -5,7 +5,11 @@ import 'package:happycart/features/result/result_page.dart';
 import 'package:happycart/features/result/result_state.dart';
 import 'package:happycart_rules/happycart_rules.dart';
 
-ProductLookupResult _product({String? imageUrl}) => ProductLookupResult(
+ProductLookupResult _product({
+  String? imageUrl,
+  List<String> badIngredients = const ['blue_1', 'sugar'],
+  List<String> reasonCodes = const ['artificial_color', 'refined_sugar'],
+}) => ProductLookupResult(
   barcode: '8809990172030',
   brand: '웰코리아',
   name: '사이다볼',
@@ -13,8 +17,8 @@ ProductLookupResult _product({String? imageUrl}) => ProductLookupResult(
   category: '캔디류',
   imageUrl: imageUrl,
   verdict: Verdict.notOkay,
-  badIngredients: const ['blue_1', 'sugar'],
-  reasonCodes: const ['artificial_color', 'refined_sugar'],
+  badIngredients: badIngredients,
+  reasonCodes: reasonCodes,
   ruleVersion: 'v1.1.0',
   computedAt: DateTime.parse('2026-05-26T03:23:24Z'),
   sourceCheckedAt: DateTime.parse('2026-05-26T03:18:11.482068+00:00'),
@@ -71,5 +75,27 @@ void main() {
     // 제품 이미지(network)는 없고, 슬롯에 fallback 아이콘이 뜬다.
     expect(productImage(), findsNothing);
     expect(find.byIcon(Icons.shopping_bag_outlined), findsOneWidget);
+  });
+
+  testWidgets('황색 canonical label: yellow_5→황색4호, yellow_6→황색5호 (KR 번호 교정)', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResultPage(
+          state: ResultState.success(
+            _product(
+              badIngredients: const ['yellow_5', 'yellow_6'],
+              reasonCodes: const ['artificial_color'],
+            ),
+          ),
+          onRescan: () {},
+        ),
+      ),
+    );
+
+    expect(find.text('황색4호'), findsOneWidget); // yellow_5 = 타트라진
+    expect(find.text('황색5호'), findsOneWidget); // yellow_6 = 선셋
+    expect(find.text('황색6호'), findsNothing); // 옛 오류 라벨 제거
   });
 }
