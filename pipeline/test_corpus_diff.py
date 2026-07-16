@@ -138,11 +138,47 @@ def test_fetch_corpus_shape():
         conn.rollback()
 
 
+def test_diff_results_detects_array_change():
+    """diff_results: verdict 불변이어도 검출배열 변화를 포착, newly_not_okay 판정."""
+    import corpus_diff
+
+    # (1) 배열 변화(verdict 동일): red_40 → red_40+yellow_5
+    before = {"p1": {"verdict": "not_okay",
+                     "bad_ingredients_detected": ["red_40"],
+                     "verdict_reason_codes": ["artificial_color"]}}
+    after = {"p1": {"verdict": "not_okay",
+                    "bad_ingredients_detected": ["red_40", "yellow_5"],
+                    "verdict_reason_codes": ["artificial_color"]}}
+    d = {x["ref"]: x for x in corpus_diff.diff_results(before, after)}
+    check("diff: 배열변화 포착(verdict 동일)", "p1" in d)
+    if "p1" in d:
+        check("diff: new_bad_keys=[yellow_5]", d["p1"]["new_bad_keys"] == ["yellow_5"],
+              f"{d['p1'].get('new_bad_keys')}")
+        check("diff: newly_not_okay=False(이미 not_okay)", d["p1"]["newly_not_okay"] is False)
+
+    # (2) okay → not_okay 뒤집힘
+    before2 = {"p2": {"verdict": "okay", "bad_ingredients_detected": [],
+                      "verdict_reason_codes": []}}
+    after2 = {"p2": {"verdict": "not_okay", "bad_ingredients_detected": ["yellow_6"],
+                     "verdict_reason_codes": ["artificial_color"]}}
+    d2 = {x["ref"]: x for x in corpus_diff.diff_results(before2, after2)}
+    check("diff: okay→not_okay 포착", "p2" in d2)
+    if "p2" in d2:
+        check("diff: newly_not_okay=True", d2["p2"]["newly_not_okay"] is True)
+        check("diff: new_bad_keys=[yellow_6]", d2["p2"]["new_bad_keys"] == ["yellow_6"])
+
+    # (3) 변화 없음 → diff 비어야 함
+    same = {"p3": {"verdict": "okay", "bad_ingredients_detected": [],
+                   "verdict_reason_codes": []}}
+    check("diff: 무변화 제외", corpus_diff.diff_results(same, dict(same)) == [])
+
+
 def main():
     tests = [
         test_resolve_app_dir_precedence,
         test_write_snapshot_shape,
         test_fetch_corpus_shape,
+        test_diff_results_detects_array_change,
     ]
     for t in tests:
         try:

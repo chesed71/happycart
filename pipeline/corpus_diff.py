@@ -17,9 +17,13 @@ checkout 룰로 판정해 verdict·검출배열 변화를 diff 한다 (스펙 §
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import subprocess
+
+from common import connect
+from judge import resolve_app_dir, run_rules
 
 # judge.py 와 동일 상수 — review-gated source 는 verified 행만 판정 대상.
 REVIEW_GATED_SOURCES = {"lottemartzetta"}
@@ -89,3 +93,110 @@ def write_snapshot(rows: list[dict], path: str, catalog_path: str, app_dir: str)
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, ensure_ascii=False, indent=2)
+
+
+def judge_snapshot(snapshot_rows: list[dict], app_dir: str) -> dict:
+    """스냅샷 토큰을 현재 checkout 룰로 판정 → {ref: 판정결과}.
+
+    judge.run_rules 를 재사용해 compute_verdicts.dart --json 을 호출한다 (룰 단일 소스).
+    반환 결과는 compute_verdicts 출력 형태({ref, verdict, bad_ingredients_detected,
+    good_ingredients_detected, verdict_reason_codes, rule_version}).
+    """
+    items = [{"ref": r["ref"], "tokens": r["tokens"]} for r in snapshot_rows]
+    return {res["ref"]: res for res in run_rules(items, app_dir)}
+
+
+def diff_results(before: dict, after: dict) -> list[dict]:
+    """ref 별로 verdict 또는 bad/reason 배열이 달라진 항목만 반환.
+
+    verdict 가 같아도 bad_ingredients_detected/verdict_reason_codes 배열 변화를 포착한다
+    (스펙 §8 — verdict-only diff 는 reason/canonicalKey 변화를 놓침). 배열은 정렬 비교라
+    순서 무관. new_bad_keys 는 새로 검출된 bad canonicalKey, newly_not_okay 는 판정이
+    not_okay 로 새로 뒤집혔는지.
+    """
+    diffs = []
+    for ref in sorted(set(before) | set(after)):
+        b = before.get(ref, {})
+        a = after.get(ref, {})
+        vb, va = b.get("verdict"), a.get("verdict")
+        bb = sorted(b.get("bad_ingredients_detected") or [])
+        ba = sorted(a.get("bad_ingredients_detected") or [])
+        rb = sorted(b.get("verdict_reason_codes") or [])
+        ra = sorted(a.get("verdict_reason_codes") or [])
+        if vb == va and bb == ba and rb == ra:
+            continue
+        diffs.append({
+            "ref": ref,
+            "verdict_before": vb, "verdict_after": va,
+            "bad_before": bb, "bad_after": ba,
+            "reason_before": rb, "reason_after": ra,
+            "new_bad_keys": sorted(set(ba) - set(bb)),
+            "newly_not_okay": vb != "not_okay" and va == "not_okay",
+        })
+    return diffs
+
+
+def write_diff_report(diffs: list[dict], path: str) -> None:
+    """diff 리포트 저장 — 요약(총 변화 수·신규 not_okay 수)과 항목 리스트."""
+    report = {
+        "changed_count": len(diffs),
+        "newly_not_okay_count": sum(1 for d in diffs if d["newly_not_okay"]),
+        "diffs": diffs,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+
+def _load_json(path: str):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _judge_phase(app_dir: str, snapshot_path: str, result_out: str) -> dict:
+    """스냅샷을 로드해 현재 룰로 판정하고 결과를 저장. before/after 공통."""
+    snap = _load_json(snapshot_path)
+    results = judge_snapshot(snap["rows"], app_dir)
+    with open(result_out, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    return results
+
+
+def main():
+    ap = argparse.ArgumentParser(description="corpus 전/후 판정 diff (오탐0 게이트)")
+    ap.add_argument("--phase", choices=["before", "after", "diff"], required=True)
+    ap.add_argument("--app-dir", default=None,
+                    help="happycart 앱 디렉터리 (미지정 시 HAPPYCART_APP_DIR/기본값)")
+    ap.add_argument("--catalog", default=None, help="before: 스냅샷 메타용 카탈로그 경로")
+    ap.add_argument("--snapshot", default=None, help="토큰 스냅샷 JSON (before 작성, after 재사용)")
+    ap.add_argument("--result-out", default=None, help="before/after: 판정 결과 저장 경로")
+    ap.add_argument("--result-before", default=None, help="diff: before 판정 결과")
+    ap.add_argument("--result-after", default=None, help="diff: after 판정 결과")
+    ap.add_argument("--diff-out", default=None, help="diff: 리포트 저장 경로")
+    ap.add_argument("--dsn", default=None)
+    args = ap.parse_args()
+
+    app_dir = resolve_app_dir(args.app_dir)
+
+    if args.phase == "before":
+        # 토큰 스냅샷 1회 materialize (DB) + 반영 전 룰로 판정.
+        with connect(args.dsn) as conn:
+            rows = fetch_corpus(conn)
+        write_snapshot(rows, args.snapshot, args.catalog, app_dir)
+        results = _judge_phase(app_dir, args.snapshot, args.result_out)
+        print(f"before: corpus {len(rows)}행 materialize → {args.snapshot}, "
+              f"판정 {len(results)} → {args.result_out}")
+    elif args.phase == "after":
+        # 반영 후 — 동일 스냅샷 토큰을 재판정.
+        results = _judge_phase(app_dir, args.snapshot, args.result_out)
+        print(f"after: 판정 {len(results)} → {args.result_out}")
+    else:  # diff
+        before = _load_json(args.result_before)
+        after = _load_json(args.result_after)
+        diffs = diff_results(before, after)
+        write_diff_report(diffs, args.diff_out)
+        nno = sum(1 for d in diffs if d["newly_not_okay"])
+        print(f"diff: {len(diffs)}건 변화, {nno}건 신규 not_okay → {args.diff_out}")
+
+
+if __name__ == "__main__":
+    main()
