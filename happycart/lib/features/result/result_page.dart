@@ -119,8 +119,8 @@ String _canonicalLabel(String canonicalKey) {
     case 'acesulfame_k': return '아세설팜칼륨';
     case 'saccharin': return '사카린';
     case 'red_40': return '적색40호';
-    case 'yellow_5': return '황색5호';
-    case 'yellow_6': return '황색6호';
+    case 'yellow_5': return '황색4호';
+    case 'yellow_6': return '황색5호';
     case 'blue_1': return '청색1호';
     case 'red_3': return '적색3호';
     case 'hfcs': return '고과당 옥수수시럽';

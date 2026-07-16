@@ -219,6 +219,20 @@ void main() {
     });
   });
 
+  group('computeVerdict — 황색 KR/US 번호 교정(플립)', () {
+    // 한국 황색4호=타트라진=yellow_5, 황색5호=선셋=yellow_6 (근거: evidence_yellow_colors.md)
+    test('황색5호(선셋)는 yellow_6 로 검출, yellow_5 아님', () {
+      final r = computeVerdict(const IngredientInput(tokens: ['정제수', '황색5호']));
+      expect(r.badCanonicalKeys, contains('yellow_6'));
+      expect(r.badCanonicalKeys, isNot(contains('yellow_5')));
+    });
+
+    test('황색4호(타트라진)는 yellow_5 로 검출', () {
+      final r = computeVerdict(const IngredientInput(tokens: ['정제수', '황색4호']));
+      expect(r.badCanonicalKeys, contains('yellow_5'));
+    });
+  });
+
   test('ruleVersion is v1.1.0', () {
     expect(ruleVersion, 'v1.1.0');
   });

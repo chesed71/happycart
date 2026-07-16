@@ -31,12 +31,12 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'yellow_5',
     reasonCode: 'artificial_color',
-    aliases: ['황색5호', '황색 5호', 'yellow 5', 'tartrazine', 'E102', '황색제4호'],
+    aliases: ['황색4호', '황색 4호', 'yellow 5', 'tartrazine', 'E102', '황색제4호'],
   ),
   IngredientEntry(
     canonicalKey: 'yellow_6',
     reasonCode: 'artificial_color',
-    aliases: ['황색6호', '황색 6호', 'yellow 6', 'sunset yellow', 'E110', '황색제5호'],
+    aliases: ['황색5호', '황색 5호', 'yellow 6', 'sunset yellow', 'E110', '황색제5호'],
   ),
   IngredientEntry(
     canonicalKey: 'blue_1',
