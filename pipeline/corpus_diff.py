@@ -40,7 +40,7 @@ def fetch_corpus(conn, review_gated=REVIEW_GATED_SOURCES) -> list[dict]:
         cur.execute(
             """
             select id, ingredients_tokens, verdict::text,
-                   bad_ingredients_detected, verdict_reason_codes
+                   bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes
             from collected_products
             where stage in ('tokenized', 'judged')
               and (source <> all(%s) or review_decision = 'verified')
@@ -55,9 +55,40 @@ def fetch_corpus(conn, review_gated=REVIEW_GATED_SOURCES) -> list[dict]:
             "tokens": tokens or [],
             "prev_verdict": verdict,
             "prev_bad": bad or [],
+            "prev_good": good or [],
             "prev_reason": reason or [],
         }
-        for cid, tokens, verdict, bad, reason in rows
+        for cid, tokens, verdict, bad, good, reason in rows
+    ]
+
+
+def fetch_masters(conn) -> list[dict]:
+    """product_masters(서비스 노출) 를 조회 — rule_version 변경 시 재판정 대상.
+
+    collected 와 달리 review-gating 이 없다(이미 승격된 서비스 상품). 빈 토큰만 제외.
+    ruleVersion bump 로 masters 도 flip/검출배열 변화가 생길 수 있으므로 오탐0 게이트를
+    collected 뿐 아니라 masters 에도 돌릴 수 있게 한다(스펙 §9 재판정 대상 = collected+masters).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select id, ingredients_tokens, verdict::text,
+                   bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes
+            from product_masters
+            where array_length(ingredients_tokens, 1) >= 1
+            """
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "ref": str(mid),
+            "tokens": tokens or [],
+            "prev_verdict": verdict,
+            "prev_bad": bad or [],
+            "prev_good": good or [],
+            "prev_reason": reason or [],
+        }
+        for mid, tokens, verdict, bad, good, reason in rows
     ]
 
 
@@ -107,12 +138,13 @@ def judge_snapshot(snapshot_rows: list[dict], app_dir: str) -> dict:
 
 
 def diff_results(before: dict, after: dict) -> list[dict]:
-    """ref 별로 verdict 또는 bad/reason 배열이 달라진 항목만 반환.
+    """ref 별로 verdict·bad·reason·good 배열 중 하나라도 달라진 항목만 반환.
 
-    verdict 가 같아도 bad_ingredients_detected/verdict_reason_codes 배열 변화를 포착한다
-    (스펙 §8 — verdict-only diff 는 reason/canonicalKey 변화를 놓침). 배열은 정렬 비교라
-    순서 무관. new_bad_keys 는 새로 검출된 bad canonicalKey, newly_not_okay 는 판정이
-    not_okay 로 새로 뒤집혔는지.
+    verdict 가 같아도 검출배열(bad/reason/good) 변화를 포착한다 (스펙 §8 — verdict-only
+    diff 는 reason/canonicalKey 변화를 놓침). good_ingredients_detected 도 앱에 노출되므로
+    (result_page 의 Good 섹션·product_lookup_result) 함께 diff 해 룰 출력 drift 를 빠짐없이
+    잡는다. 배열은 정렬 비교라 순서 무관. new_bad_keys/new_good_keys 는 새로 검출된 키,
+    removed_good_keys 는 사라진 good 키, newly_not_okay 는 판정이 not_okay 로 새로 뒤집혔는지.
     """
     diffs = []
     for ref in sorted(set(before) | set(after)):
@@ -123,14 +155,19 @@ def diff_results(before: dict, after: dict) -> list[dict]:
         ba = sorted(a.get("bad_ingredients_detected") or [])
         rb = sorted(b.get("verdict_reason_codes") or [])
         ra = sorted(a.get("verdict_reason_codes") or [])
-        if vb == va and bb == ba and rb == ra:
+        gb = sorted(b.get("good_ingredients_detected") or [])
+        ga = sorted(a.get("good_ingredients_detected") or [])
+        if vb == va and bb == ba and rb == ra and gb == ga:
             continue
         diffs.append({
             "ref": ref,
             "verdict_before": vb, "verdict_after": va,
             "bad_before": bb, "bad_after": ba,
             "reason_before": rb, "reason_after": ra,
+            "good_before": gb, "good_after": ga,
             "new_bad_keys": sorted(set(ba) - set(bb)),
+            "new_good_keys": sorted(set(ga) - set(gb)),
+            "removed_good_keys": sorted(set(gb) - set(ga)),
             "newly_not_okay": vb != "not_okay" and va == "not_okay",
         })
     return diffs
@@ -172,6 +209,8 @@ def main():
     ap.add_argument("--result-before", default=None, help="diff: before 판정 결과")
     ap.add_argument("--result-after", default=None, help="diff: after 판정 결과")
     ap.add_argument("--diff-out", default=None, help="diff: 리포트 저장 경로")
+    ap.add_argument("--target", choices=["collected", "masters"], default="collected",
+                    help="before: 스냅샷 모집단 — collected_products(기본) 또는 product_masters(서비스)")
     ap.add_argument("--dsn", default=None)
     args = ap.parse_args()
 
@@ -180,10 +219,10 @@ def main():
     if args.phase == "before":
         # 토큰 스냅샷 1회 materialize (DB) + 반영 전 룰로 판정.
         with connect(args.dsn) as conn:
-            rows = fetch_corpus(conn)
+            rows = fetch_masters(conn) if args.target == "masters" else fetch_corpus(conn)
         write_snapshot(rows, args.snapshot, args.catalog, app_dir)
         results = _judge_phase(app_dir, args.snapshot, args.result_out)
-        print(f"before: corpus {len(rows)}행 materialize → {args.snapshot}, "
+        print(f"before[{args.target}]: {len(rows)}행 materialize → {args.snapshot}, "
               f"판정 {len(results)} → {args.result_out}")
     elif args.phase == "after":
         # 반영 후 — 동일 스냅샷 토큰을 재판정.

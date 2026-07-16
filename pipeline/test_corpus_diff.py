@@ -46,10 +46,12 @@ def test_resolve_app_dir_precedence():
         # (b) CLI 없으면 env 사용
         check("resolve_app_dir: env 사용",
               judge.resolve_app_dir(None) == "/env/path")
-        # (c) 둘 다 없으면 기본값
+        # (c) 둘 다 없으면 기본값(judge.py 위치 기준 파생 — 워크스테이션 무관)
         os.environ.pop("HAPPYCART_APP_DIR", None)
         check("resolve_app_dir: 기본값",
-              judge.resolve_app_dir(None) == DEFAULT_APP_DIR)
+              judge.resolve_app_dir(None) == judge.HAPPYCART_APP_DIR)
+        check("resolve_app_dir: 기본값이 happycart 로 끝남",
+              judge.resolve_app_dir(None).endswith("/happycart"))
     finally:
         if saved is None:
             os.environ.pop("HAPPYCART_APP_DIR", None)
@@ -138,6 +140,25 @@ def test_fetch_corpus_shape():
         conn.rollback()
 
 
+def test_fetch_masters_shape():
+    """fetch_masters: product_masters 를 ref/tokens/prev_* 로 반환 (DB 필요)."""
+    import corpus_diff
+
+    try:
+        conn = psycopg.connect(dsn())
+    except psycopg.Error as e:
+        skip("test_fetch_masters_shape", f"DB 없음: {e}")
+        return
+    with conn:
+        rows = corpus_diff.fetch_masters(conn)
+        check("fetch_masters: list 반환", isinstance(rows, list))
+        if rows:
+            r = rows[0]
+            check("fetch_masters: 필드 완비",
+                  all(k in r for k in ("ref", "tokens", "prev_verdict",
+                                       "prev_bad", "prev_good", "prev_reason")))
+
+
 def test_diff_results_detects_array_change():
     """diff_results: verdict 불변이어도 검출배열 변화를 포착, newly_not_okay 판정."""
     import corpus_diff
@@ -167,7 +188,18 @@ def test_diff_results_detects_array_change():
         check("diff: newly_not_okay=True", d2["p2"]["newly_not_okay"] is True)
         check("diff: new_bad_keys=[yellow_6]", d2["p2"]["new_bad_keys"] == ["yellow_6"])
 
-    # (3) 변화 없음 → diff 비어야 함
+    # (3) good 배열만 변화(verdict·bad 동일) → 포착 (앱 노출 데이터)
+    gb = {"p4": {"verdict": "okay", "bad_ingredients_detected": [],
+                 "verdict_reason_codes": [], "good_ingredients_detected": ["olive_oil"]}}
+    ga = {"p4": {"verdict": "okay", "bad_ingredients_detected": [],
+                 "verdict_reason_codes": [], "good_ingredients_detected": ["olive_oil", "honey"]}}
+    dg = {x["ref"]: x for x in corpus_diff.diff_results(gb, ga)}
+    check("diff: good 배열변화 포착", "p4" in dg)
+    if "p4" in dg:
+        check("diff: new_good_keys=[honey]", dg["p4"]["new_good_keys"] == ["honey"])
+        check("diff: removed_good_keys=[]", dg["p4"]["removed_good_keys"] == [])
+
+    # (4) 변화 없음 → diff 비어야 함
     same = {"p3": {"verdict": "okay", "bad_ingredients_detected": [],
                    "verdict_reason_codes": []}}
     check("diff: 무변화 제외", corpus_diff.diff_results(same, dict(same)) == [])
@@ -178,6 +210,7 @@ def main():
         test_resolve_app_dir_precedence,
         test_write_snapshot_shape,
         test_fetch_corpus_shape,
+        test_fetch_masters_shape,
         test_diff_results_detects_array_change,
     ]
     for t in tests:

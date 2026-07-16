@@ -18,8 +18,11 @@ from collections import Counter
 
 from common import connect
 
-# 기본 앱 디렉터리 (현재 머신 실경로). CLI --app-dir / HAPPYCART_APP_DIR 로 재정의.
-HAPPYCART_APP_DIR = "/Users/ronen/Project/HappyCart/happycart"
+# 기본 앱 디렉터리 — judge.py(pipeline/) 기준 형제 happycart 로 파생(워크스테이션 무관).
+# CLI --app-dir / 환경변수 HAPPYCART_APP_DIR 로 재정의.
+HAPPYCART_APP_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "happycart")
+)
 REVIEW_GATED_SOURCES = {"lottemartzetta"}
 
 

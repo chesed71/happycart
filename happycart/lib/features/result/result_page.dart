@@ -22,12 +22,18 @@ class ResultPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: switch (state) {
-        SuccessResultState(:final product) =>
-          _SuccessLayout(product: product, onRescan: onRescan),
-        NotFoundResultState(:final barcode) =>
-          _NotFoundLayout(barcode: barcode, onRescan: onRescan),
-        NetworkErrorResultState(:final onRetry) =>
-          _NetworkErrorLayout(onRetry: onRetry, onRescan: onRescan),
+        SuccessResultState(:final product) => _SuccessLayout(
+          product: product,
+          onRescan: onRescan,
+        ),
+        NotFoundResultState(:final barcode) => _NotFoundLayout(
+          barcode: barcode,
+          onRescan: onRescan,
+        ),
+        NetworkErrorResultState(:final onRetry) => _NetworkErrorLayout(
+          onRetry: onRetry,
+          onRescan: onRescan,
+        ),
       },
     );
   }
@@ -114,56 +120,105 @@ const TextStyle _monoStyle = TextStyle(
 String _canonicalLabel(String canonicalKey) {
   switch (canonicalKey) {
     // Bad
-    case 'aspartame': return '아스파탐';
-    case 'sucralose': return '수크랄로스';
-    case 'acesulfame_k': return '아세설팜칼륨';
-    case 'saccharin': return '사카린';
-    case 'red_40': return '적색40호';
-    case 'yellow_5': return '황색4호';
-    case 'yellow_6': return '황색5호';
-    case 'blue_1': return '청색1호';
-    case 'red_3': return '적색3호';
-    case 'hfcs': return '고과당 옥수수시럽';
-    case 'soybean_oil': return '대두유';
-    case 'canola_oil': return '카놀라유';
-    case 'corn_oil': return '옥수수유';
-    case 'sunflower_oil_refined': return '정제 해바라기씨유';
-    case 'cottonseed_oil': return '면실유';
-    case 'hydrogenated': return '경화유 / 트랜스지방';
-    case 'bha': return 'BHA';
-    case 'bht': return 'BHT';
-    case 'tbhq': return 'TBHQ';
-    case 'sodium_nitrite': return '아질산나트륨';
-    case 'sodium_nitrate': return '질산나트륨';
-    case 'carrageenan': return '카라기난';
-    case 'polysorbate_80': return '폴리소르베이트 80';
-    case 'datem': return 'DATEM';
-    case 'mono_diglycerides': return '모노/디글리세리드';
-    case 'natural_flavors_opaque': return '천연향료 (성분 비공개)';
-    case 'artificial_flavors': return '인공향료';
-    case 'bleached_flour': return '표백 밀가루';
-    case 'enriched_flour': return '강화 밀가루';
-    case 'potassium_bromate': return '브롬산칼륨';
-    case 'maltodextrin': return '말토덱스트린';
+    case 'aspartame':
+      return '아스파탐';
+    case 'sucralose':
+      return '수크랄로스';
+    case 'acesulfame_k':
+      return '아세설팜칼륨';
+    case 'saccharin':
+      return '사카린';
+    case 'red_40':
+      return '적색40호';
+    case 'yellow_5':
+      return '황색4호';
+    case 'yellow_6':
+      return '황색5호';
+    case 'blue_1':
+      return '청색1호';
+    case 'red_3':
+      return '적색3호';
+    case 'hfcs':
+      return '고과당 옥수수시럽';
+    case 'soybean_oil':
+      return '대두유';
+    case 'canola_oil':
+      return '카놀라유';
+    case 'corn_oil':
+      return '옥수수유';
+    case 'sunflower_oil_refined':
+      return '정제 해바라기씨유';
+    case 'cottonseed_oil':
+      return '면실유';
+    case 'hydrogenated':
+      return '경화유 / 트랜스지방';
+    case 'bha':
+      return 'BHA';
+    case 'bht':
+      return 'BHT';
+    case 'tbhq':
+      return 'TBHQ';
+    case 'sodium_nitrite':
+      return '아질산나트륨';
+    case 'sodium_nitrate':
+      return '질산나트륨';
+    case 'carrageenan':
+      return '카라기난';
+    case 'polysorbate_80':
+      return '폴리소르베이트 80';
+    case 'datem':
+      return 'DATEM';
+    case 'mono_diglycerides':
+      return '모노/디글리세리드';
+    case 'natural_flavors_opaque':
+      return '천연향료 (성분 비공개)';
+    case 'artificial_flavors':
+      return '인공향료';
+    case 'bleached_flour':
+      return '표백 밀가루';
+    case 'enriched_flour':
+      return '강화 밀가루';
+    case 'potassium_bromate':
+      return '브롬산칼륨';
+    case 'maltodextrin':
+      return '말토덱스트린';
     // Good
-    case 'extra_virgin_olive_oil': return '엑스트라버진 올리브유';
-    case 'avocado_oil': return '아보카도 오일';
-    case 'coconut_oil': return '코코넛 오일';
-    case 'grass_fed_butter': return '그래스페드 버터 / 기';
-    case 'honey': return '꿀';
-    case 'maple_syrup': return '메이플시럽';
-    case 'date': return '대추야자';
-    case 'sea_salt': return '천일염';
-    case 'whole_grain': return '통곡물';
-    case 'sprouted_grain': return '발아곡물';
-    case 'kimchi': return '김치';
-    case 'kefir': return '케피어';
-    case 'sauerkraut': return '사우어크라우트';
-    case 'kombucha': return '콤부차';
-    case 'organic': return '유기농';
-    case 'pasture_raised_egg': return '방목 달걀';
-    case 'grass_fed_beef': return '그래스페드 소고기';
-    default: return canonicalKey;
+    case 'extra_virgin_olive_oil':
+      return '엑스트라버진 올리브유';
+    case 'avocado_oil':
+      return '아보카도 오일';
+    case 'coconut_oil':
+      return '코코넛 오일';
+    case 'grass_fed_butter':
+      return '그래스페드 버터 / 기';
+    case 'honey':
+      return '꿀';
+    case 'maple_syrup':
+      return '메이플시럽';
+    case 'date':
+      return '대추야자';
+    case 'sea_salt':
+      return '천일염';
+    case 'whole_grain':
+      return '통곡물';
+    case 'sprouted_grain':
+      return '발아곡물';
+    case 'kimchi':
+      return '김치';
+    case 'kefir':
+      return '케피어';
+    case 'sauerkraut':
+      return '사우어크라우트';
+    case 'kombucha':
+      return '콤부차';
+    case 'organic':
+      return '유기농';
+    case 'pasture_raised_egg':
+      return '방목 달걀';
+    case 'grass_fed_beef':
+      return '그래스페드 소고기';
+    default:
+      return canonicalKey;
   }
 }
 
@@ -398,8 +453,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                 dotBg: theme.soft,
                 dotFg: theme.softFg,
                 isOpen: _expanded[i],
-                onToggle: () =>
-                    setState(() => _expanded[i] = !_expanded[i]),
+                onToggle: () => setState(() => _expanded[i] = !_expanded[i]),
               ),
             ],
           ],
@@ -570,10 +624,7 @@ class _VerdictHeroArt extends StatelessWidget {
                 child: Image.asset(theme.cartAsset, width: size * 0.60),
               ),
               // 제품 이미지 (원 중앙)
-              Align(
-                alignment: Alignment.center,
-                child: productImg,
-              ),
+              Align(alignment: Alignment.center, child: productImg),
               // 손 마크 (앞, 좌상단 — 원 안으로 들어오게 우측 아래로)
               Positioned(
                 top: size * 0.13,
