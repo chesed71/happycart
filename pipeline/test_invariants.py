@@ -585,6 +585,44 @@ def test_held_counts_scoped_to_ids():
         conn.rollback()
 
 
+def test_parent_barcode_conflict_holds_merged_child():
+    """parent 바코드가 다른 master 소속이면 그 멤버의 자식도 붙이지 않는다.
+
+    parent 만 conflict 처리하고 자식을 새 master 에 붙이면, parent 없이 자식만 달린
+    shadow master 가 남아 '같은 상품=한 master' 병합 의도가 깨진다(PR #12 재검토 MEDIUM).
+    자식은 parsed 로 hold 해 다음 실행에서 parent 와 함께 재시도하고, 빈 master 는 정리돼야."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        # 기존의 '다른 상품' master 가 parent 바코드(SYN_BC_1)를 이미 소유(충돌 유발)
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at)
+            values ('B','다른상품','다른-원재료','okay','v1',now(),'t',now()) returning id""")
+        other = cur.fetchone()[0]
+        cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')",
+                    (SYN_BC_1, other))
+        # 승격 후보 parent(바코드 SYN_BC_1 → other 와 충돌) + 여유 바코드 자식(SYN_BC_2)
+        parent = _promotable_parent(cur, SYN_BC_1)   # brand='B', ingredients='밀가루, 설탕'
+        child = _merged_child(cur, parent, SYN_BC_2)
+        run_promotion(cur, id=str(parent), stats=Counter())
+        cur.execute("select stage from collected_products where id=%s", (parent,))
+        check("parent 바코드 충돌→conflict", cur.fetchone()[0] == "conflict")
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        cstage = cur.fetchone()[0]
+        check("자식 hold(parsed) — shadow master 방지", cstage == "parsed", str(cstage))
+        cur.execute("select count(*) from product_barcodes where barcode=%s", (SYN_BC_2,))
+        check("자식 바코드 미attach", cur.fetchone()[0] == 0)
+        # parent 데이터(brand='B', ingredients='밀가루, 설탕')로 만든 shadow master 미존재
+        cur.execute("select count(*) from product_masters where ingredients_hash = md5(%s||'|'||%s)",
+                    ("B", "밀가루, 설탕"))
+        check("shadow master 미생성(빈 master 정리)", cur.fetchone()[0] == 0)
+        # 기존 다른 master 는 보존
+        cur.execute("select exists(select 1 from product_masters where id=%s)", (other,))
+        check("기존 다른 master 보존", cur.fetchone()[0] is True)
+        conn.rollback()
+
+
 def main():
     for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
@@ -595,7 +633,8 @@ def main():
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
               test_held_group_child_not_promoted,
               test_merged_child_verified_promotes_via_parent_only,
-              test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids]:
+              test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
+              test_parent_barcode_conflict_holds_merged_child]:
         try:
             t()
         except Exception as e:  # noqa

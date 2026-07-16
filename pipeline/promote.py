@@ -249,7 +249,10 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                 for update
             """, (str(m[0]),))
             targets.extend(cur.fetchall())
-            for (tid, tbarcode, tsize) in targets:
+            # targets[0] = 멤버(부모) 자신, 이후는 머지 자식. 부모 바코드가 이 master 에
+            # 못 붙으면(다른 master 충돌) 자식도 붙이지 않는다 — 부모 없이 자식만 달린
+            # shadow master 로 같은 상품이 갈라지는 것을 막는다.
+            for pos, (tid, tbarcode, tsize) in enumerate(targets):
                 cur.execute("""
                     insert into product_barcodes (barcode, master_id, size)
                     values (%s, %s, %s)
@@ -269,6 +272,11 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                             where id = %s
                         """, (tbarcode, str(owner), tid))
                         stats["barcode_conflict_held"] += 1
+                        if pos == 0:
+                            # 부모 바코드가 다른 master 로 충돌 — 자식은 이 master 에 붙이지
+                            # 않고 parsed 로 남겨(다음 실행에서 부모와 함께 재시도) shadow
+                            # master 생성을 막는다. 아무것도 안 붙으면 빈 master 는 아래서 정리.
+                            break
                         continue
                     # 같은 master (재실행 멱등) — 정상 진행
                 attached += 1
