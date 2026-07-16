@@ -169,8 +169,13 @@ def test_select_fetch_dispatch():
           corpus_diff.select_fetch("masters") is corpus_diff.fetch_masters)
     check("select_fetch: collected→fetch_corpus",
           corpus_diff.select_fetch("collected") is corpus_diff.fetch_corpus)
-    check("select_fetch: 기타→fetch_corpus(기본)",
-          corpus_diff.select_fetch("xxx") is corpus_diff.fetch_corpus)
+    # 알 수 없는 target 은 silent fallback 대신 fail-fast(ValueError)
+    raised = False
+    try:
+        corpus_diff.select_fetch("xxx")
+    except ValueError:
+        raised = True
+    check("select_fetch: unknown target→ValueError", raised)
 
 
 def test_diff_results_detects_array_change():

@@ -93,8 +93,16 @@ def fetch_masters(conn) -> list[dict]:
 
 
 def select_fetch(target: str):
-    """--target 에 따라 모집단 조회 함수 선택 (masters=서비스 상품, collected=기본)."""
-    return fetch_masters if target == "masters" else fetch_corpus
+    """--target 에 따라 모집단 조회 함수 선택 (masters=서비스 상품, collected=기본).
+
+    알 수 없는 target 은 silent fallback 대신 fail-fast — 안전 게이트라 잘못된 target 이
+    조용히 collected 를 읽어 오탐0 판정을 흐리지 않도록.
+    """
+    if target == "masters":
+        return fetch_masters
+    if target == "collected":
+        return fetch_corpus
+    raise ValueError(f"알 수 없는 target: {target!r} (collected|masters)")
 
 
 def catalog_sha256(catalog_path: str) -> str:
