@@ -108,11 +108,13 @@ void main() {
 class _Entry {
   final String canonicalKey;
   final String reasonCode;
+  final String label;
   final List<String> aliases;
 
   _Entry({
     required this.canonicalKey,
     required this.reasonCode,
+    required this.label,
     required this.aliases,
   });
 }
@@ -145,6 +147,13 @@ List<_Entry> _validateEntries(
       );
     }
 
+    final entryLabel = map['label'];
+    if (entryLabel is! String || entryLabel.trim().isEmpty) {
+      _fail(
+        '"$label" 엔트리 "$canonicalKey"의 label 이 공백 아닌 문자열이 아닙니다: $entryLabel',
+      );
+    }
+
     final aliasesRaw = map['aliases'];
     if (aliasesRaw is! List || aliasesRaw.isEmpty) {
       _fail(
@@ -163,6 +172,7 @@ List<_Entry> _validateEntries(
       _Entry(
         canonicalKey: canonicalKey,
         reasonCode: reasonCode,
+        label: entryLabel,
         aliases: aliases,
       ),
     );
@@ -187,6 +197,7 @@ void _writePart({
       ..writeln('  IngredientEntry(')
       ..writeln('    canonicalKey: ${_quote(entry.canonicalKey)},')
       ..writeln('    reasonCode: ${_quote(entry.reasonCode)},')
+      ..writeln('    label: ${_quote(entry.label)},')
       ..writeln('    aliases: [${entry.aliases.map(_quote).join(', ')}],')
       ..writeln('  ),');
   }

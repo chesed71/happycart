@@ -5,10 +5,11 @@ import 'package:happycart_rules/happycart_rules.dart';
 import 'package:test/test.dart';
 
 /// Step 1 덤프 도구와 동일한 직렬화 규칙 —
-/// `{canonicalKey, reasonCode, aliases}` 순서 맵, 리스트 순서 유지.
+/// `{canonicalKey, reasonCode, label, aliases}` 순서 맵, 리스트 순서 유지.
 Map<String, Object?> _entryToMap(IngredientEntry entry) => {
   'canonicalKey': entry.canonicalKey,
   'reasonCode': entry.reasonCode,
+  'label': entry.label,
   'aliases': entry.aliases,
 };
 
@@ -38,6 +39,18 @@ void main() {
 
     test('good catalog matches golden entry-by-entry (order preserved)', () {
       expect(actualGood, equals(goldenGood));
+    });
+  });
+
+  group('label coverage', () {
+    test('모든 bad/good 엔트리가 공백 아닌 label 을 가진다', () {
+      for (final e in [...badIngredientCatalog, ...goodIngredientCatalog]) {
+        expect(
+          e.label.trim(),
+          isNotEmpty,
+          reason: 'canonicalKey "${e.canonicalKey}" 의 label 이 비어 있음',
+        );
+      }
     });
   });
 }

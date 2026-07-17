@@ -6,21 +6,25 @@ const List<IngredientEntry> goodIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'extra_virgin_olive_oil',
     reasonCode: 'clean_fat',
+    label: '엑스트라버진 올리브유',
     aliases: ['엑스트라버진 올리브유', '엑스트라 버진 올리브유', 'evoo', 'extra virgin olive oil'],
   ),
   IngredientEntry(
     canonicalKey: 'avocado_oil',
     reasonCode: 'clean_fat',
+    label: '아보카도 오일',
     aliases: ['아보카도 오일', '아보카도오일', 'avocado oil'],
   ),
   IngredientEntry(
     canonicalKey: 'coconut_oil',
     reasonCode: 'clean_fat',
+    label: '코코넛 오일',
     aliases: ['코코넛 오일', '코코넛오일', 'coconut oil'],
   ),
   IngredientEntry(
     canonicalKey: 'grass_fed_butter',
     reasonCode: 'clean_fat',
+    label: '그래스페드 버터 / 기',
     aliases: [
       '그래스페드 버터',
       '그래스 페드 버터',
@@ -33,61 +37,73 @@ const List<IngredientEntry> goodIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'honey',
     reasonCode: 'natural_sweetener',
+    label: '꿀',
     aliases: ['꿀', 'honey'],
   ),
   IngredientEntry(
     canonicalKey: 'maple_syrup',
     reasonCode: 'natural_sweetener',
+    label: '메이플시럽',
     aliases: ['메이플시럽', '메이플 시럽', 'maple syrup'],
   ),
   IngredientEntry(
     canonicalKey: 'date',
     reasonCode: 'natural_sweetener',
+    label: '대추야자',
     aliases: ['대추야자', 'dates', 'medjool'],
   ),
   IngredientEntry(
     canonicalKey: 'sea_salt',
     reasonCode: 'natural_salt',
+    label: '천일염',
     aliases: ['천일염', 'sea salt'],
   ),
   IngredientEntry(
     canonicalKey: 'whole_grain',
     reasonCode: 'whole_grain',
+    label: '통곡물',
     aliases: ['통곡물', '통밀', 'whole grain', 'whole wheat'],
   ),
   IngredientEntry(
     canonicalKey: 'sprouted_grain',
     reasonCode: 'whole_grain',
+    label: '발아곡물',
     aliases: ['발아곡물', 'sprouted grain', 'sprouted wheat'],
   ),
   IngredientEntry(
     canonicalKey: 'kimchi',
     reasonCode: 'fermented',
+    label: '김치',
     aliases: ['김치', 'kimchi'],
   ),
   IngredientEntry(
     canonicalKey: 'kefir',
     reasonCode: 'fermented',
+    label: '케피어',
     aliases: ['케피어', 'kefir'],
   ),
   IngredientEntry(
     canonicalKey: 'sauerkraut',
     reasonCode: 'fermented',
+    label: '사우어크라우트',
     aliases: ['사우어크라우트', 'sauerkraut'],
   ),
   IngredientEntry(
     canonicalKey: 'kombucha',
     reasonCode: 'fermented',
+    label: '콤부차',
     aliases: ['콤부차', 'kombucha'],
   ),
   IngredientEntry(
     canonicalKey: 'organic',
     reasonCode: 'organic',
+    label: '유기농',
     aliases: ['유기농', 'organic'],
   ),
   IngredientEntry(
     canonicalKey: 'pasture_raised_egg',
     reasonCode: 'pasture_raised',
+    label: '방목 달걀',
     aliases: [
       '방목 달걀',
       '방목달걀',
@@ -99,6 +115,7 @@ const List<IngredientEntry> goodIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'grass_fed_beef',
     reasonCode: 'grass_fed',
+    label: '그래스페드 소고기',
     aliases: ['그래스페드 소고기', 'grass-fed beef', 'grass fed beef'],
   ),
 ];
