@@ -18,6 +18,7 @@ import 'package:happycart_rules/happycart_rules.dart';
 Map<String, Object?> _entryToMap(IngredientEntry entry) => {
   'canonicalKey': entry.canonicalKey,
   'reasonCode': entry.reasonCode,
+  'label': entry.label,
   'aliases': entry.aliases,
 };
 

@@ -6,51 +6,61 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'aspartame',
     reasonCode: 'artificial_sweetener',
+    label: '아스파탐',
     aliases: ['아스파탐', 'aspartame', 'E951'],
   ),
   IngredientEntry(
     canonicalKey: 'sucralose',
     reasonCode: 'artificial_sweetener',
+    label: '수크랄로스',
     aliases: ['수크랄로스', 'sucralose', 'E955'],
   ),
   IngredientEntry(
     canonicalKey: 'acesulfame_k',
     reasonCode: 'artificial_sweetener',
+    label: '아세설팜칼륨',
     aliases: ['아세설팜칼륨', 'acesulfame', 'ace-k', 'acesulfame potassium', 'E950'],
   ),
   IngredientEntry(
     canonicalKey: 'saccharin',
     reasonCode: 'artificial_sweetener',
+    label: '사카린',
     aliases: ['사카린', 'saccharin', 'E954'],
   ),
   IngredientEntry(
     canonicalKey: 'red_40',
     reasonCode: 'artificial_color',
+    label: '적색40호',
     aliases: ['적색40호', '적색 40호', 'red 40', 'allura red', 'E129', '식용색소적색제40호'],
   ),
   IngredientEntry(
     canonicalKey: 'yellow_5',
     reasonCode: 'artificial_color',
+    label: '황색4호',
     aliases: ['황색4호', '황색 4호', 'yellow 5', 'tartrazine', 'E102', '황색제4호'],
   ),
   IngredientEntry(
     canonicalKey: 'yellow_6',
     reasonCode: 'artificial_color',
+    label: '황색5호',
     aliases: ['황색5호', '황색 5호', 'yellow 6', 'sunset yellow', 'E110', '황색제5호'],
   ),
   IngredientEntry(
     canonicalKey: 'blue_1',
     reasonCode: 'artificial_color',
+    label: '청색1호',
     aliases: ['청색1호', '청색 1호', 'blue 1', 'brilliant blue', 'E133', '청색제1호'],
   ),
   IngredientEntry(
     canonicalKey: 'red_3',
     reasonCode: 'artificial_color',
+    label: '적색3호',
     aliases: ['적색3호', '적색 3호', 'red 3', 'erythrosine', 'E127', '적색제3호'],
   ),
   IngredientEntry(
     canonicalKey: 'hfcs',
     reasonCode: 'hfcs',
+    label: '고과당 옥수수시럽',
     aliases: [
       '고과당옥수수시럽',
       '액상과당',
@@ -65,31 +75,37 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'soybean_oil',
     reasonCode: 'seed_oil',
+    label: '대두유',
     aliases: ['대두유', '콩기름', '대두기름', 'soybean oil'],
   ),
   IngredientEntry(
     canonicalKey: 'canola_oil',
     reasonCode: 'seed_oil',
+    label: '카놀라유',
     aliases: ['카놀라유', '채종유', 'canola oil', 'rapeseed oil'],
   ),
   IngredientEntry(
     canonicalKey: 'corn_oil',
     reasonCode: 'seed_oil',
+    label: '옥수수유',
     aliases: ['옥수수유', '옥수수기름', 'corn oil'],
   ),
   IngredientEntry(
     canonicalKey: 'sunflower_oil_refined',
     reasonCode: 'seed_oil',
+    label: '정제 해바라기씨유',
     aliases: ['정제 해바라기씨유', '정제해바라기씨유', 'refined sunflower oil'],
   ),
   IngredientEntry(
     canonicalKey: 'cottonseed_oil',
     reasonCode: 'seed_oil',
+    label: '면실유',
     aliases: ['면실유', 'cottonseed oil', '목화씨앗유', '목화씨유'],
   ),
   IngredientEntry(
     canonicalKey: 'hydrogenated',
     reasonCode: 'hydrogenated_oil',
+    label: '경화유 / 트랜스지방',
     aliases: [
       '경화유',
       '부분경화유',
@@ -105,46 +121,55 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'bha',
     reasonCode: 'synthetic_preservative',
+    label: 'BHA',
     aliases: ['bha', '부틸하이드록시아니솔', 'butylated hydroxyanisole', 'E320'],
   ),
   IngredientEntry(
     canonicalKey: 'bht',
     reasonCode: 'synthetic_preservative',
+    label: 'BHT',
     aliases: ['bht', '부틸하이드록시톨루엔', 'butylated hydroxytoluene', 'E321'],
   ),
   IngredientEntry(
     canonicalKey: 'tbhq',
     reasonCode: 'synthetic_preservative',
+    label: 'TBHQ',
     aliases: ['tbhq', '터셔리부틸하이드로퀴논', 'tert-butylhydroquinone', 'E319'],
   ),
   IngredientEntry(
     canonicalKey: 'sodium_nitrite',
     reasonCode: 'nitrite',
+    label: '아질산나트륨',
     aliases: ['아질산나트륨', 'sodium nitrite', 'E250'],
   ),
   IngredientEntry(
     canonicalKey: 'sodium_nitrate',
     reasonCode: 'nitrite',
+    label: '질산나트륨',
     aliases: ['sodium nitrate', 'E251'],
   ),
   IngredientEntry(
     canonicalKey: 'carrageenan',
     reasonCode: 'carrageenan',
+    label: '카라기난',
     aliases: ['카라기난', 'carrageenan', 'E407'],
   ),
   IngredientEntry(
     canonicalKey: 'polysorbate_80',
     reasonCode: 'emulsifier_concern',
+    label: '폴리소르베이트 80',
     aliases: ['폴리소르베이트80', '폴리소르베이트 80', 'polysorbate 80', 'E433'],
   ),
   IngredientEntry(
     canonicalKey: 'datem',
     reasonCode: 'emulsifier_concern',
+    label: 'DATEM',
     aliases: ['datem', '다템', '글리세린디아세틸주석산지방산에스테르'],
   ),
   IngredientEntry(
     canonicalKey: 'mono_diglycerides',
     reasonCode: 'emulsifier_concern',
+    label: '모노/디글리세리드',
     aliases: [
       '모노글리세리드',
       '디글리세리드',
@@ -157,36 +182,43 @@ const List<IngredientEntry> badIngredientCatalog = [
   IngredientEntry(
     canonicalKey: 'natural_flavors_opaque',
     reasonCode: 'opaque_flavor',
+    label: '천연향료 (성분 비공개)',
     aliases: ['natural flavors', '천연향료'],
   ),
   IngredientEntry(
     canonicalKey: 'artificial_flavors',
     reasonCode: 'opaque_flavor',
+    label: '인공향료',
     aliases: ['합성착향료', '인공향료', 'artificial flavors', 'artificial flavor'],
   ),
   IngredientEntry(
     canonicalKey: 'bleached_flour',
     reasonCode: 'refined_flour',
+    label: '표백 밀가루',
     aliases: ['표백 밀가루', '표백밀가루', 'bleached flour'],
   ),
   IngredientEntry(
     canonicalKey: 'enriched_flour',
     reasonCode: 'refined_flour',
+    label: '강화 밀가루',
     aliases: ['강화 밀가루', '강화밀가루', 'enriched flour'],
   ),
   IngredientEntry(
     canonicalKey: 'potassium_bromate',
     reasonCode: 'bromate',
+    label: '브롬산칼륨',
     aliases: ['브롬산칼륨', 'potassium bromate', 'E924'],
   ),
   IngredientEntry(
     canonicalKey: 'maltodextrin',
     reasonCode: 'maltodextrin',
+    label: '말토덱스트린',
     aliases: ['말토덱스트린', 'maltodextrin', 'E1400'],
   ),
   IngredientEntry(
     canonicalKey: 'sugar',
     reasonCode: 'refined_sugar',
+    label: '설탕',
     aliases: ['설탕'],
   ),
 ];

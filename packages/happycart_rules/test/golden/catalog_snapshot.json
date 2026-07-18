@@ -3,6 +3,7 @@
     {
       "canonicalKey": "aspartame",
       "reasonCode": "artificial_sweetener",
+      "label": "아스파탐",
       "aliases": [
         "아스파탐",
         "aspartame",
@@ -12,6 +13,7 @@
     {
       "canonicalKey": "sucralose",
       "reasonCode": "artificial_sweetener",
+      "label": "수크랄로스",
       "aliases": [
         "수크랄로스",
         "sucralose",
@@ -21,6 +23,7 @@
     {
       "canonicalKey": "acesulfame_k",
       "reasonCode": "artificial_sweetener",
+      "label": "아세설팜칼륨",
       "aliases": [
         "아세설팜칼륨",
         "acesulfame",
@@ -32,6 +35,7 @@
     {
       "canonicalKey": "saccharin",
       "reasonCode": "artificial_sweetener",
+      "label": "사카린",
       "aliases": [
         "사카린",
         "saccharin",
@@ -41,6 +45,7 @@
     {
       "canonicalKey": "red_40",
       "reasonCode": "artificial_color",
+      "label": "적색40호",
       "aliases": [
         "적색40호",
         "적색 40호",
@@ -53,6 +58,7 @@
     {
       "canonicalKey": "yellow_5",
       "reasonCode": "artificial_color",
+      "label": "황색4호",
       "aliases": [
         "황색4호",
         "황색 4호",
@@ -65,6 +71,7 @@
     {
       "canonicalKey": "yellow_6",
       "reasonCode": "artificial_color",
+      "label": "황색5호",
       "aliases": [
         "황색5호",
         "황색 5호",
@@ -77,6 +84,7 @@
     {
       "canonicalKey": "blue_1",
       "reasonCode": "artificial_color",
+      "label": "청색1호",
       "aliases": [
         "청색1호",
         "청색 1호",
@@ -89,6 +97,7 @@
     {
       "canonicalKey": "red_3",
       "reasonCode": "artificial_color",
+      "label": "적색3호",
       "aliases": [
         "적색3호",
         "적색 3호",
@@ -101,6 +110,7 @@
     {
       "canonicalKey": "hfcs",
       "reasonCode": "hfcs",
+      "label": "고과당 옥수수시럽",
       "aliases": [
         "고과당옥수수시럽",
         "액상과당",
@@ -115,6 +125,7 @@
     {
       "canonicalKey": "soybean_oil",
       "reasonCode": "seed_oil",
+      "label": "대두유",
       "aliases": [
         "대두유",
         "콩기름",
@@ -125,6 +136,7 @@
     {
       "canonicalKey": "canola_oil",
       "reasonCode": "seed_oil",
+      "label": "카놀라유",
       "aliases": [
         "카놀라유",
         "채종유",
@@ -135,6 +147,7 @@
     {
       "canonicalKey": "corn_oil",
       "reasonCode": "seed_oil",
+      "label": "옥수수유",
       "aliases": [
         "옥수수유",
         "옥수수기름",
@@ -144,6 +157,7 @@
     {
       "canonicalKey": "sunflower_oil_refined",
       "reasonCode": "seed_oil",
+      "label": "정제 해바라기씨유",
       "aliases": [
         "정제 해바라기씨유",
         "정제해바라기씨유",
@@ -153,6 +167,7 @@
     {
       "canonicalKey": "cottonseed_oil",
       "reasonCode": "seed_oil",
+      "label": "면실유",
       "aliases": [
         "면실유",
         "cottonseed oil",
@@ -163,6 +178,7 @@
     {
       "canonicalKey": "hydrogenated",
       "reasonCode": "hydrogenated_oil",
+      "label": "경화유 / 트랜스지방",
       "aliases": [
         "경화유",
         "부분경화유",
@@ -178,6 +194,7 @@
     {
       "canonicalKey": "bha",
       "reasonCode": "synthetic_preservative",
+      "label": "BHA",
       "aliases": [
         "bha",
         "부틸하이드록시아니솔",
@@ -188,6 +205,7 @@
     {
       "canonicalKey": "bht",
       "reasonCode": "synthetic_preservative",
+      "label": "BHT",
       "aliases": [
         "bht",
         "부틸하이드록시톨루엔",
@@ -198,6 +216,7 @@
     {
       "canonicalKey": "tbhq",
       "reasonCode": "synthetic_preservative",
+      "label": "TBHQ",
       "aliases": [
         "tbhq",
         "터셔리부틸하이드로퀴논",
@@ -208,6 +227,7 @@
     {
       "canonicalKey": "sodium_nitrite",
       "reasonCode": "nitrite",
+      "label": "아질산나트륨",
       "aliases": [
         "아질산나트륨",
         "sodium nitrite",
@@ -217,6 +237,7 @@
     {
       "canonicalKey": "sodium_nitrate",
       "reasonCode": "nitrite",
+      "label": "질산나트륨",
       "aliases": [
         "sodium nitrate",
         "E251"
@@ -225,6 +246,7 @@
     {
       "canonicalKey": "carrageenan",
       "reasonCode": "carrageenan",
+      "label": "카라기난",
       "aliases": [
         "카라기난",
         "carrageenan",
@@ -234,6 +256,7 @@
     {
       "canonicalKey": "polysorbate_80",
       "reasonCode": "emulsifier_concern",
+      "label": "폴리소르베이트 80",
       "aliases": [
         "폴리소르베이트80",
         "폴리소르베이트 80",
@@ -244,6 +267,7 @@
     {
       "canonicalKey": "datem",
       "reasonCode": "emulsifier_concern",
+      "label": "DATEM",
       "aliases": [
         "datem",
         "다템",
@@ -253,6 +277,7 @@
     {
       "canonicalKey": "mono_diglycerides",
       "reasonCode": "emulsifier_concern",
+      "label": "모노/디글리세리드",
       "aliases": [
         "모노글리세리드",
         "디글리세리드",
@@ -265,6 +290,7 @@
     {
       "canonicalKey": "natural_flavors_opaque",
       "reasonCode": "opaque_flavor",
+      "label": "천연향료 (성분 비공개)",
       "aliases": [
         "natural flavors",
         "천연향료"
@@ -273,6 +299,7 @@
     {
       "canonicalKey": "artificial_flavors",
       "reasonCode": "opaque_flavor",
+      "label": "인공향료",
       "aliases": [
         "합성착향료",
         "인공향료",
@@ -283,6 +310,7 @@
     {
       "canonicalKey": "bleached_flour",
       "reasonCode": "refined_flour",
+      "label": "표백 밀가루",
       "aliases": [
         "표백 밀가루",
         "표백밀가루",
@@ -292,6 +320,7 @@
     {
       "canonicalKey": "enriched_flour",
       "reasonCode": "refined_flour",
+      "label": "강화 밀가루",
       "aliases": [
         "강화 밀가루",
         "강화밀가루",
@@ -301,6 +330,7 @@
     {
       "canonicalKey": "potassium_bromate",
       "reasonCode": "bromate",
+      "label": "브롬산칼륨",
       "aliases": [
         "브롬산칼륨",
         "potassium bromate",
@@ -310,6 +340,7 @@
     {
       "canonicalKey": "maltodextrin",
       "reasonCode": "maltodextrin",
+      "label": "말토덱스트린",
       "aliases": [
         "말토덱스트린",
         "maltodextrin",
@@ -319,6 +350,7 @@
     {
       "canonicalKey": "sugar",
       "reasonCode": "refined_sugar",
+      "label": "설탕",
       "aliases": [
         "설탕"
       ]
@@ -328,6 +360,7 @@
     {
       "canonicalKey": "extra_virgin_olive_oil",
       "reasonCode": "clean_fat",
+      "label": "엑스트라버진 올리브유",
       "aliases": [
         "엑스트라버진 올리브유",
         "엑스트라 버진 올리브유",
@@ -338,6 +371,7 @@
     {
       "canonicalKey": "avocado_oil",
       "reasonCode": "clean_fat",
+      "label": "아보카도 오일",
       "aliases": [
         "아보카도 오일",
         "아보카도오일",
@@ -347,6 +381,7 @@
     {
       "canonicalKey": "coconut_oil",
       "reasonCode": "clean_fat",
+      "label": "코코넛 오일",
       "aliases": [
         "코코넛 오일",
         "코코넛오일",
@@ -356,6 +391,7 @@
     {
       "canonicalKey": "grass_fed_butter",
       "reasonCode": "clean_fat",
+      "label": "그래스페드 버터 / 기",
       "aliases": [
         "그래스페드 버터",
         "그래스 페드 버터",
@@ -368,6 +404,7 @@
     {
       "canonicalKey": "honey",
       "reasonCode": "natural_sweetener",
+      "label": "꿀",
       "aliases": [
         "꿀",
         "honey"
@@ -376,6 +413,7 @@
     {
       "canonicalKey": "maple_syrup",
       "reasonCode": "natural_sweetener",
+      "label": "메이플시럽",
       "aliases": [
         "메이플시럽",
         "메이플 시럽",
@@ -385,6 +423,7 @@
     {
       "canonicalKey": "date",
       "reasonCode": "natural_sweetener",
+      "label": "대추야자",
       "aliases": [
         "대추야자",
         "dates",
@@ -394,6 +433,7 @@
     {
       "canonicalKey": "sea_salt",
       "reasonCode": "natural_salt",
+      "label": "천일염",
       "aliases": [
         "천일염",
         "sea salt"
@@ -402,6 +442,7 @@
     {
       "canonicalKey": "whole_grain",
       "reasonCode": "whole_grain",
+      "label": "통곡물",
       "aliases": [
         "통곡물",
         "통밀",
@@ -412,6 +453,7 @@
     {
       "canonicalKey": "sprouted_grain",
       "reasonCode": "whole_grain",
+      "label": "발아곡물",
       "aliases": [
         "발아곡물",
         "sprouted grain",
@@ -421,6 +463,7 @@
     {
       "canonicalKey": "kimchi",
       "reasonCode": "fermented",
+      "label": "김치",
       "aliases": [
         "김치",
         "kimchi"
@@ -429,6 +472,7 @@
     {
       "canonicalKey": "kefir",
       "reasonCode": "fermented",
+      "label": "케피어",
       "aliases": [
         "케피어",
         "kefir"
@@ -437,6 +481,7 @@
     {
       "canonicalKey": "sauerkraut",
       "reasonCode": "fermented",
+      "label": "사우어크라우트",
       "aliases": [
         "사우어크라우트",
         "sauerkraut"
@@ -445,6 +490,7 @@
     {
       "canonicalKey": "kombucha",
       "reasonCode": "fermented",
+      "label": "콤부차",
       "aliases": [
         "콤부차",
         "kombucha"
@@ -453,6 +499,7 @@
     {
       "canonicalKey": "organic",
       "reasonCode": "organic",
+      "label": "유기농",
       "aliases": [
         "유기농",
         "organic"
@@ -461,6 +508,7 @@
     {
       "canonicalKey": "pasture_raised_egg",
       "reasonCode": "pasture_raised",
+      "label": "방목 달걀",
       "aliases": [
         "방목 달걀",
         "방목달걀",
@@ -472,6 +520,7 @@
     {
       "canonicalKey": "grass_fed_beef",
       "reasonCode": "grass_fed",
+      "label": "그래스페드 소고기",
       "aliases": [
         "그래스페드 소고기",
         "grass-fed beef",

@@ -18,12 +18,16 @@ class IngredientEntry {
   /// 사용자 표시·집계용 카테고리. 예: `artificial_sweetener`.
   final String reasonCode;
 
+  /// 사용자 표시용 한글 라벨(카탈로그 단일소스). 예: `아스파탐`, `황색4호`.
+  final String label;
+
   /// 매칭 후보 — 한·영 표기와 E-number 를 모두 포함.
   final List<String> aliases;
 
   const IngredientEntry({
     required this.canonicalKey,
     required this.reasonCode,
+    required this.label,
     required this.aliases,
   });
 }
