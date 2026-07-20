@@ -43,6 +43,13 @@ void main() {
     (w) => w is Image && w.semanticLabel == '사이다볼',
   );
 
+  // FlagCard 헤더의 성분명 Text(fontSize 15) 만 골라 찾는다 — reasonCodeLabel
+  // 태그와 canonicalLabel 이 우연히 같은 문자열(예: 카라기난)일 수 있어
+  // find.text 만으로는 모호해질 수 있다.
+  Finder cardName(String label) => find.byWidgetPredicate(
+    (w) => w is Text && w.data == label && w.style?.fontSize == 15,
+  );
+
   testWidgets('success result renders product image when imageUrl is present', (
     tester,
   ) async {
@@ -97,5 +104,91 @@ void main() {
     expect(find.text('황색4호'), findsOneWidget); // yellow_5 = 타트라진
     expect(find.text('황색5호'), findsOneWidget); // yellow_6 = 선셋
     expect(find.text('황색6호'), findsNothing); // 옛 오류 라벨 제거
+  });
+
+  group('위험도 정렬 + 배지 + 컬러바', () {
+    testWidgets(
+      '카드가 위험도 내림차순으로 배치되고, 동순위는 canonicalKey 오름차순(tie-break), 미등록 key는 스킵',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ResultPage(
+              state: ResultState.success(
+                _product(
+                  // 입력 순서를 일부러 뒤섞는다 — 'sugar' 를 'aspartame' 보다
+                  // 앞에 둬 tie-break 를 검증(§10 a2): 둘 다 riskLevel=medium
+                  // 이므로 렌더 순서는 입력 순서가 아니라 canonicalKey 순이어야
+                  // 한다(aspartame < sugar). 'nonexistent_key' 는 번들
+                  // 카탈로그 미등록이라 스킵돼야 한다.
+                  badIngredients: const [
+                    'sugar',
+                    'nonexistent_key',
+                    'carrageenan',
+                    'hydrogenated',
+                    'aspartame',
+                  ],
+                  reasonCodes: const [],
+                ),
+              ),
+              onRescan: () {},
+            ),
+          ),
+        );
+
+        // (c) 미등록 canonicalKey는 카드 자체가 안 생긴다 — 등록된 4건만.
+        expect(find.byType(FlagCard), findsNWidgets(4));
+
+        // (a)/(a2) 위험도 내림차순 + 동순위 canonicalKey 오름차순.
+        final hydrogenatedY = tester
+            .getTopLeft(cardName('경화유 / 트랜스지방'))
+            .dy; // high
+        final aspartameY = tester.getTopLeft(cardName('아스파탐')).dy; // medium
+        final sugarY = tester.getTopLeft(cardName('설탕')).dy; // medium
+        final carrageenanY = tester.getTopLeft(cardName('카라기난')).dy; // low
+
+        expect(hydrogenatedY, lessThan(aspartameY));
+        expect(aspartameY, lessThan(sugarY));
+        expect(sugarY, lessThan(carrageenanY));
+
+        // (b) 배지 텍스트 + 컬러바 렌더.
+        expect(find.text('높음'), findsOneWidget);
+        expect(find.text('보통'), findsNWidgets(2));
+        expect(find.text('낮음'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('flagcard-risk-bar')),
+          findsNWidgets(4),
+        );
+      },
+    );
+
+    testWidgets('FlagCard를 riskLevel: null로 pump하면 배지·컬러바 미표시(카드는 정상 렌더)', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FlagCard(
+              name: '테스트 성분',
+              tag: '테스트태그',
+              reason: '테스트 사유',
+              ruleCode: 'test_code',
+              dotBg: const Color(0xFFFCE5E1),
+              dotFg: const Color(0xFF9E2D22),
+              riskLevel: null,
+              riskReason: null,
+              riskEvidence: null,
+              isOpen: false,
+              onToggle: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('테스트 성분'), findsOneWidget);
+      expect(find.text('높음'), findsNothing);
+      expect(find.text('보통'), findsNothing);
+      expect(find.text('낮음'), findsNothing);
+      expect(find.byKey(const ValueKey('flagcard-risk-bar')), findsNothing);
+    });
   });
 }
