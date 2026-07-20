@@ -174,7 +174,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     with SingleTickerProviderStateMixin {
   late final AnimationController _badgeCtrl;
   late final Animation<double> _badgeScale;
-  late final List<(String, String)> _badPairs; // (canonicalKey, reasonCode)
+  late final List<rules.IngredientRiskDisplay> _riskDisplays;
   late final List<bool> _expanded;
 
   @override
@@ -189,16 +189,8 @@ class _SuccessLayoutState extends State<_SuccessLayout>
       curve: const Cubic(0.2, 0.9, 0.3, 1.4),
     );
 
-    _badPairs = [];
-    for (final key in widget.product.badIngredients) {
-      final entry = rules.badIngredientCatalog
-          .where((e) => e.canonicalKey == key)
-          .cast<rules.IngredientEntry?>()
-          .firstWhere((_) => true, orElse: () => null);
-      if (entry != null) _badPairs.add((key, entry.reasonCode));
-    }
-
-    _expanded = List.generate(_badPairs.length, (i) => i == 0);
+    _riskDisplays = rules.buildRiskDisplayList(widget.product.badIngredients);
+    _expanded = List.generate(_riskDisplays.length, (i) => i == 0);
   }
 
   @override
@@ -328,7 +320,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
   }
 
   Widget _buildBody(_VT theme) {
-    final hasBad = _badPairs.isNotEmpty;
+    final hasBad = _riskDisplays.isNotEmpty;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(18, 22, 18, 16),
@@ -339,19 +331,22 @@ class _SuccessLayoutState extends State<_SuccessLayout>
           if (hasBad) ...[
             _SectionHeader(
               title: '신경 쓰이는 성분',
-              count: _badPairs.length,
+              count: _riskDisplays.length,
               hint: '탭하면 이유를 볼 수 있어요',
               countColor: theme.accent,
             ),
-            for (int i = 0; i < _badPairs.length; i++) ...[
+            for (int i = 0; i < _riskDisplays.length; i++) ...[
               if (i > 0) const SizedBox(height: 10),
-              _FlagCard(
-                name: _canonicalLabel(_badPairs[i].$1),
-                tag: rules.reasonCodeLabel(_badPairs[i].$2),
-                reason: _reasonDesc(_badPairs[i].$2),
-                ruleCode: _badPairs[i].$2,
+              FlagCard(
+                name: _canonicalLabel(_riskDisplays[i].canonicalKey),
+                tag: rules.reasonCodeLabel(_riskDisplays[i].reasonCode),
+                reason: _reasonDesc(_riskDisplays[i].reasonCode),
+                ruleCode: _riskDisplays[i].reasonCode,
                 dotBg: theme.soft,
                 dotFg: theme.softFg,
+                riskLevel: _riskDisplays[i].riskLevel,
+                riskReason: _riskDisplays[i].riskReason,
+                riskEvidence: _riskDisplays[i].riskEvidence,
                 isOpen: _expanded[i],
                 onToggle: () => setState(() => _expanded[i] = !_expanded[i]),
               ),
@@ -657,25 +652,74 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _FlagCard extends StatelessWidget {
+/// 위험도(높음/보통/낮음)별 배지·컬러바 색 — not_okay 톤(`AppTheme.stop*`)과
+/// 조화되는 빨강(높음)·주황(보통)·노랑(낮음) 계열 상수.
+class _RiskStyle {
+  final Color bar, badgeBg, badgeFg;
+  final String label;
+  const _RiskStyle({
+    required this.bar,
+    required this.badgeBg,
+    required this.badgeFg,
+    required this.label,
+  });
+}
+
+const Map<rules.RiskLevel, _RiskStyle> _riskStyles = {
+  rules.RiskLevel.high: _RiskStyle(
+    bar: AppTheme.stopMain,
+    badgeBg: AppTheme.stopMain,
+    badgeFg: Colors.white,
+    label: '높음',
+  ),
+  rules.RiskLevel.medium: _RiskStyle(
+    bar: AppTheme.brand,
+    badgeBg: AppTheme.brandSoft,
+    badgeFg: AppTheme.brandStrong,
+    label: '보통',
+  ),
+  rules.RiskLevel.low: _RiskStyle(
+    bar: Color(0xFFE8B93A),
+    badgeBg: Color(0xFFFCF3D9),
+    badgeFg: Color(0xFF8A6A12),
+    label: '낮음',
+  ),
+};
+
+class FlagCard extends StatelessWidget {
   final String name, tag, reason, ruleCode;
   final Color dotBg, dotFg;
+  final rules.RiskLevel? riskLevel;
+  final String? riskReason;
+  final String? riskEvidence;
   final bool isOpen;
   final VoidCallback onToggle;
 
-  const _FlagCard({
+  const FlagCard({
     required this.name,
     required this.tag,
     required this.reason,
     required this.ruleCode,
     required this.dotBg,
     required this.dotFg,
+    required this.riskLevel,
+    required this.riskReason,
+    required this.riskEvidence,
     required this.isOpen,
     required this.onToggle,
+    super.key,
   });
 
   @override
   Widget build(BuildContext context) {
+    // riskLevel 이 null 이면(버전 스큐 방어) 배지·컬러바를 렌더하지 않는다 —
+    // 데이터 결함을 '낮음'으로 오표시하지 않기 위함. 카드 자체는 정상 렌더.
+    final level = riskLevel;
+    final riskStyle = level == null ? null : _riskStyles[level];
+    // 로컬 변수로 받아야 non-null 승격이 적용된다(공개 필드는 승격 대상 아님).
+    final riskReasonText = riskReason;
+    final riskEvidenceText = riskEvidence;
+
     return AnimatedSize(
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeInOut,
@@ -693,108 +737,190 @@ class _FlagCard extends StatelessWidget {
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: [
-            // 헤더 (탭 가능)
-            InkWell(
-              onTap: onToggle,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 30,
-                      height: 30,
-                      decoration: BoxDecoration(
-                        color: dotBg,
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        '!',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: dotFg,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        name,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.ink,
-                          letterSpacing: -0.15,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: dotBg,
-                        borderRadius: BorderRadius.circular(7),
-                      ),
-                      child: Text(
-                        tag,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: dotFg,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    AnimatedRotation(
-                      turns: isOpen ? 0.5 : 0,
-                      duration: const Duration(milliseconds: 250),
-                      child: Icon(
-                        Icons.keyboard_arrow_down_rounded,
-                        size: 20,
-                        color: AppTheme.inkMute,
-                      ),
-                    ),
-                  ],
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 위험도 컬러바 (좌측)
+              if (riskStyle != null)
+                Container(
+                  key: const ValueKey('flagcard-risk-bar'),
+                  width: 4,
+                  color: riskStyle.bar,
                 ),
-              ),
-            ),
-            // 본문 (접히는 부분)
-            if (isOpen)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(56, 0, 14, 14),
+              Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      reason,
-                      style: const TextStyle(
-                        fontSize: 13.5,
-                        height: 1.55,
-                        color: AppTheme.inkSoft,
+                    // 헤더 (탭 가능)
+                    InkWell(
+                      onTap: onToggle,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: dotBg,
+                                borderRadius: BorderRadius.circular(9),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                '!',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  color: dotFg,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                name,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.ink,
+                                  letterSpacing: -0.15,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            if (riskStyle != null) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: riskStyle.badgeBg,
+                                  borderRadius: BorderRadius.circular(7),
+                                ),
+                                child: Text(
+                                  riskStyle.label,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: riskStyle.badgeFg,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: dotBg,
+                                borderRadius: BorderRadius.circular(7),
+                              ),
+                              child: Text(
+                                tag,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: dotFg,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            AnimatedRotation(
+                              turns: isOpen ? 0.5 : 0,
+                              duration: const Duration(milliseconds: 250),
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                size: 20,
+                                color: AppTheme.inkMute,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 9),
-                    Text(
-                      'RULE: $ruleCode',
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontFamilyFallback: ['Courier'],
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: AppTheme.inkMute,
-                        letterSpacing: 0.2,
+                    // 본문 (접히는 부분)
+                    if (isOpen)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(56, 0, 14, 14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              reason,
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                height: 1.55,
+                                color: AppTheme.inkSoft,
+                              ),
+                            ),
+                            const SizedBox(height: 9),
+                            Text(
+                              'RULE: $ruleCode',
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontFamilyFallback: ['Courier'],
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.inkMute,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                            // 건강 근거 병기(대체 아님) — 빈/null 값은 줄 자체를 생략.
+                            if (riskReasonText != null &&
+                                riskReasonText.trim().isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                '건강 근거',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.inkMute,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                riskReasonText,
+                                style: const TextStyle(
+                                  fontSize: 13.5,
+                                  height: 1.55,
+                                  color: AppTheme.inkSoft,
+                                ),
+                              ),
+                            ],
+                            if (riskEvidenceText != null &&
+                                riskEvidenceText.trim().isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              const Text(
+                                '출처',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.inkMute,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                riskEvidenceText,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  height: 1.4,
+                                  color: AppTheme.inkMute,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );

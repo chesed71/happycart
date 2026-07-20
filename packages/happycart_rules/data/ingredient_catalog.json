@@ -9,7 +9,10 @@
         "아스파탐",
         "aspartame",
         "E951"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "비당감미료로 WHO는 체중 조절 목적의 섭취를 권장하지 않으며, IARC는 2B(발암 가능물질)로 분류합니다.",
+      "riskEvidence": "WHO(2023); IARC(2023); JECFA ADI 40mg/kg"
     },
     {
       "canonicalKey": "sucralose",
@@ -19,7 +22,10 @@
         "수크랄로스",
         "sucralose",
         "E955"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "비당감미료로 WHO는 섭취를 권장하지 않으나, FDA·EFSA는 사용을 승인했습니다.",
+      "riskEvidence": "WHO(2023); EFSA ADI 15mg/kg"
     },
     {
       "canonicalKey": "acesulfame_k",
@@ -31,7 +37,10 @@
         "ace-k",
         "acesulfame potassium",
         "E950"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "비당감미료로 WHO는 체중 조절 목적의 섭취를 권장하지 않습니다.",
+      "riskEvidence": "WHO(2023); EFSA(2025) 재평가"
     },
     {
       "canonicalKey": "saccharin",
@@ -41,7 +50,10 @@
         "사카린",
         "saccharin",
         "E954"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "비당감미료로 WHO는 섭취를 권장하지 않으나, 미국 국가독성프로그램(NTP)은 발암물질 목록에서 제외했습니다.",
+      "riskEvidence": "사전 '사카린나트륨'(염 동의어); WHO(2023); US NTP(2000)"
     },
     {
       "canonicalKey": "red_40",
@@ -54,7 +66,10 @@
         "allura red",
         "E129",
         "식용색소적색제40호"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "합성 타르색소로 어린이 행동 문제와의 연관 가능성이 보고됩니다.",
+      "riskEvidence": "McCann D, Lancet(2007); EFSA"
     },
     {
       "canonicalKey": "yellow_5",
@@ -67,7 +82,10 @@
         "tartrazine",
         "E102",
         "황색제4호"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "합성 타르색소로 어린이 행동 문제와의 연관 가능성이 보고됩니다.",
+      "riskEvidence": "McCann D, Lancet(2007); EFSA"
     },
     {
       "canonicalKey": "yellow_6",
@@ -80,7 +98,10 @@
         "sunset yellow",
         "E110",
         "황색제5호"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "합성 타르색소로 어린이 행동 문제와의 연관 가능성이 보고됩니다.",
+      "riskEvidence": "McCann D, Lancet(2007); EFSA"
     },
     {
       "canonicalKey": "blue_1",
@@ -93,7 +114,10 @@
         "brilliant blue",
         "E133",
         "청색제1호"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "합성 타르색소로 어린이 행동 문제와의 연관 가능성이 보고됩니다.",
+      "riskEvidence": "McCann D, Lancet(2007); EFSA"
     },
     {
       "canonicalKey": "red_3",
@@ -106,7 +130,10 @@
         "erythrosine",
         "E127",
         "적색제3호"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "합성 타르색소로 어린이 행동 문제와의 연관 가능성이 보고됩니다.",
+      "riskEvidence": "McCann D, Lancet(2007); EFSA"
     },
     {
       "canonicalKey": "hfcs",
@@ -121,7 +148,10 @@
         "hfcs",
         "corn syrup",
         "이성화당"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "섭취량에 따라 다르며, 과다 섭취 시 대사질환·지방간 위험이 높아질 수 있습니다.",
+      "riskEvidence": "WHO(2015); Stanhope KL"
     },
     {
       "canonicalKey": "soybean_oil",
@@ -132,7 +162,10 @@
         "콩기름",
         "대두기름",
         "soybean oil"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "가공 방식에 따라 산화될 가능성이 있는 정제유입니다.",
+      "riskEvidence": "EFSA"
     },
     {
       "canonicalKey": "canola_oil",
@@ -143,7 +176,10 @@
         "채종유",
         "canola oil",
         "rapeseed oil"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "불포화지방산이 풍부해 일반적으로 안전하게 평가됩니다.",
+      "riskEvidence": "AHA; Harvard Chan"
     },
     {
       "canonicalKey": "corn_oil",
@@ -153,7 +189,10 @@
         "옥수수유",
         "옥수수기름",
         "corn oil"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "가공 방식에 따라 산화될 가능성이 있는 정제유입니다.",
+      "riskEvidence": "EFSA"
     },
     {
       "canonicalKey": "sunflower_oil_refined",
@@ -163,7 +202,10 @@
         "정제 해바라기씨유",
         "정제해바라기씨유",
         "refined sunflower oil"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "불포화지방산이 풍부하나 정제 가공을 거친 식용유입니다.",
+      "riskEvidence": "사전 '해바라기유' SAFE(AHA·Harvard)"
     },
     {
       "canonicalKey": "cottonseed_oil",
@@ -174,7 +216,10 @@
         "cottonseed oil",
         "목화씨앗유",
         "목화씨유"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "일반적으로 안전하게 평가되는 정제유입니다.",
+      "riskEvidence": "FDA; EFSA"
     },
     {
       "canonicalKey": "hydrogenated",
@@ -190,7 +235,10 @@
         "경화코코넛오일",
         "경화코코넛유",
         "경화팜핵유"
-      ]
+      ],
+      "riskLevel": "high",
+      "riskReason": "심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.",
+      "riskEvidence": "WHO REPLACE; FDA PHO; AHA"
     },
     {
       "canonicalKey": "bha",
@@ -201,7 +249,10 @@
         "부틸하이드록시아니솔",
         "butylated hydroxyanisole",
         "E320"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "우려되는 합성 산화방지제/첨가물입니다.",
+      "riskEvidence": "사전 '부틸히드록시아니솔'(보존료 MEDIUM); FDA·EFSA"
     },
     {
       "canonicalKey": "bht",
@@ -212,7 +263,10 @@
         "부틸하이드록시톨루엔",
         "butylated hydroxytoluene",
         "E321"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "우려되는 합성 산화방지제/첨가물입니다.",
+      "riskEvidence": "사전 '디부틸히드록시톨루엔'(보존료 MEDIUM); FDA·EFSA"
     },
     {
       "canonicalKey": "tbhq",
@@ -223,7 +277,10 @@
         "터셔리부틸하이드로퀴논",
         "tert-butylhydroquinone",
         "E319"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "논란이 있는 합성 산화방지제/보존료입니다.",
+      "riskEvidence": "사전 '터셔리부틸히드로퀴논'(보존료 MEDIUM); FDA·EFSA"
     },
     {
       "canonicalKey": "sodium_nitrite",
@@ -233,7 +290,10 @@
         "아질산나트륨",
         "sodium nitrite",
         "E250"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "발색·보존 목적으로 쓰이며, 니트로사민 생성 우려가 있어 IARC는 2A(조건부 발암 가능)로 분류합니다.",
+      "riskEvidence": "IARC 2A; 가공육 별개"
     },
     {
       "canonicalKey": "sodium_nitrate",
@@ -242,7 +302,10 @@
       "aliases": [
         "sodium nitrate",
         "E251"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "발색·보존 목적의 질산염/아질산염 계열로, 니트로사민 생성 우려가 있습니다.",
+      "riskEvidence": "사전 자매행 '아질산나트륨'(정확행 없음); IARC 2A"
     },
     {
       "canonicalKey": "carrageenan",
@@ -252,7 +315,10 @@
         "카라기난",
         "carrageenan",
         "E407"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "일반적으로 안전하게 평가됩니다.",
+      "riskEvidence": "FDA; EFSA"
     },
     {
       "canonicalKey": "polysorbate_80",
@@ -263,7 +329,10 @@
         "폴리소르베이트 80",
         "polysorbate 80",
         "E433"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "합성 유화제로, 동물 연구에서 장내미생물 교란이 보고된 바 있습니다.",
+      "riskEvidence": "Chassaing B, Nature(2015)"
     },
     {
       "canonicalKey": "datem",
@@ -273,7 +342,10 @@
         "datem",
         "다템",
         "글리세린디아세틸주석산지방산에스테르"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "일반적으로 안전하게 평가되는 유화제입니다.",
+      "riskEvidence": "FDA; EFSA"
     },
     {
       "canonicalKey": "mono_diglycerides",
@@ -286,7 +358,10 @@
         "monoglycerides",
         "diglycerides",
         "E471"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "널리 승인된 유화제이나, 미량의 트랜스지방을 포함할 수 있습니다.",
+      "riskEvidence": "사전 '모노글리세린'(유화제 LOW) 근접행"
     },
     {
       "canonicalKey": "natural_flavors_opaque",
@@ -295,7 +370,10 @@
       "aliases": [
         "natural flavors",
         "천연향료"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "조성이 비공개되어 건강 근거가 제한적이므로, 민감한 사람은 주의가 필요합니다.",
+      "riskEvidence": "도메인 판단"
     },
     {
       "canonicalKey": "artificial_flavors",
@@ -306,7 +384,10 @@
         "인공향료",
         "artificial flavors",
         "artificial flavor"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "우려되는 합성 향료입니다.",
+      "riskEvidence": "WHO(2023)"
     },
     {
       "canonicalKey": "bleached_flour",
@@ -316,7 +397,10 @@
         "표백 밀가루",
         "표백밀가루",
         "bleached flour"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "표백·정제 과정을 거친 밀가루로, 정제곡류 특성상 혈당에 영향을 줄 수 있습니다.",
+      "riskEvidence": "Harvard Health"
     },
     {
       "canonicalKey": "enriched_flour",
@@ -326,7 +410,10 @@
         "강화 밀가루",
         "강화밀가루",
         "enriched flour"
-      ]
+      ],
+      "riskLevel": "low",
+      "riskReason": "정제곡류로, 혈당에 영향을 줄 수 있습니다.",
+      "riskEvidence": "Harvard Chan"
     },
     {
       "canonicalKey": "potassium_bromate",
@@ -336,7 +423,10 @@
         "브롬산칼륨",
         "potassium bromate",
         "E924"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "밀가루 개량제로 쓰이며, IARC 2B(발암 가능물질)로 분류되고 EU 등 다수 국가에서 사용이 금지되어 있습니다.",
+      "riskEvidence": "IARC (검토요청)"
     },
     {
       "canonicalKey": "maltodextrin",
@@ -346,7 +436,10 @@
         "말토덱스트린",
         "maltodextrin",
         "E1400"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "적정 섭취가 필요하며, 혈당을 빠르게 상승시킬 수 있습니다.",
+      "riskEvidence": "WHO(2015); AHA(2017)"
     },
     {
       "canonicalKey": "sugar",
@@ -354,7 +447,10 @@
       "label": "설탕",
       "aliases": [
         "설탕"
-      ]
+      ],
+      "riskLevel": "medium",
+      "riskReason": "적정 섭취가 필요하며, 혈당을 빠르게 상승시킬 수 있습니다.",
+      "riskEvidence": "WHO(2015); AHA(2017)"
     }
   ],
   "good": [
