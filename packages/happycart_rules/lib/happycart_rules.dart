@@ -8,4 +8,5 @@ export 'src/bad_ingredients.dart';
 export 'src/good_ingredients.dart';
 export 'src/headline.dart';
 export 'src/ingredient_labels.dart';
+export 'src/risk_display.dart';
 export 'src/verdict.dart';

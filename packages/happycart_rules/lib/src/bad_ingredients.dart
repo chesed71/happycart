@@ -10,6 +10,50 @@ library;
 
 part 'bad_ingredients.g.dart';
 
+/// 성분 건강 위험도 등급.
+enum RiskLevel { high, medium, low }
+
+/// wire 문자열(소문자) → [RiskLevel]. 3종(`high`/`medium`/`low`) 외 값은
+/// [ArgumentError] 를 던진다.
+RiskLevel riskLevelFromWire(String wire) {
+  switch (wire) {
+    case 'high':
+      return RiskLevel.high;
+    case 'medium':
+      return RiskLevel.medium;
+    case 'low':
+      return RiskLevel.low;
+    default:
+      throw ArgumentError.value(wire, 'wire', '알 수 없는 RiskLevel wire 값');
+  }
+}
+
+/// [RiskLevel] → wire 문자열(소문자).
+String riskLevelToWire(RiskLevel level) {
+  switch (level) {
+    case RiskLevel.high:
+      return 'high';
+    case RiskLevel.medium:
+      return 'medium';
+    case RiskLevel.low:
+      return 'low';
+  }
+}
+
+/// 정렬용 순위: high=0, medium=1, low=2, null(미분류)=3(최하위).
+int riskSortRank(RiskLevel? level) {
+  switch (level) {
+    case RiskLevel.high:
+      return 0;
+    case RiskLevel.medium:
+      return 1;
+    case RiskLevel.low:
+      return 2;
+    case null:
+      return 3;
+  }
+}
+
 /// 카탈로그 한 엔트리.
 class IngredientEntry {
   /// 내부 식별자 (DB 적재 시 사용). 예: `aspartame`, `hfcs`, `red_40`.
@@ -24,11 +68,23 @@ class IngredientEntry {
   /// 매칭 후보 — 한·영 표기와 E-number 를 모두 포함.
   final List<String> aliases;
 
+  /// 건강 위험도 등급 (미분류 시 null). good 카탈로그 엔트리는 항상 null.
+  final RiskLevel? riskLevel;
+
+  /// 위험도 판정 사유(표시용 텍스트).
+  final String? riskReason;
+
+  /// 위험도 판정 근거(표시용 텍스트).
+  final String? riskEvidence;
+
   const IngredientEntry({
     required this.canonicalKey,
     required this.reasonCode,
     required this.label,
     required this.aliases,
+    this.riskLevel,
+    this.riskReason,
+    this.riskEvidence,
   });
 }
 
