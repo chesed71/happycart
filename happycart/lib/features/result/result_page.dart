@@ -668,8 +668,8 @@ class _RiskStyle {
 const Map<rules.RiskLevel, _RiskStyle> _riskStyles = {
   rules.RiskLevel.high: _RiskStyle(
     bar: AppTheme.stopMain,
-    badgeBg: AppTheme.stopSoft,
-    badgeFg: AppTheme.stopDeep,
+    badgeBg: AppTheme.stopMain,
+    badgeFg: Colors.white,
     label: '높음',
   ),
   rules.RiskLevel.medium: _RiskStyle(
