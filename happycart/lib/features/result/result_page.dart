@@ -345,7 +345,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             ),
             for (int i = 0; i < _badPairs.length; i++) ...[
               if (i > 0) const SizedBox(height: 10),
-              _FlagCard(
+              FlagCard(
                 name: _canonicalLabel(_badPairs[i].$1),
                 tag: rules.reasonCodeLabel(_badPairs[i].$2),
                 reason: _reasonDesc(_badPairs[i].$2),
@@ -657,13 +657,13 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class _FlagCard extends StatelessWidget {
+class FlagCard extends StatelessWidget {
   final String name, tag, reason, ruleCode;
   final Color dotBg, dotFg;
   final bool isOpen;
   final VoidCallback onToggle;
 
-  const _FlagCard({
+  const FlagCard({
     required this.name,
     required this.tag,
     required this.reason,
@@ -672,6 +672,7 @@ class _FlagCard extends StatelessWidget {
     required this.dotFg,
     required this.isOpen,
     required this.onToggle,
+    super.key,
   });
 
   @override
