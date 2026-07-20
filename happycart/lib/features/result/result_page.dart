@@ -716,6 +716,9 @@ class FlagCard extends StatelessWidget {
     // 데이터 결함을 '낮음'으로 오표시하지 않기 위함. 카드 자체는 정상 렌더.
     final level = riskLevel;
     final riskStyle = level == null ? null : _riskStyles[level];
+    // 로컬 변수로 받아야 non-null 승격이 적용된다(공개 필드는 승격 대상 아님).
+    final riskReasonText = riskReason;
+    final riskEvidenceText = riskEvidence;
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 280),
@@ -865,6 +868,51 @@ class FlagCard extends StatelessWidget {
                                 letterSpacing: 0.2,
                               ),
                             ),
+                            // 건강 근거 병기(대체 아님) — 빈/null 값은 줄 자체를 생략.
+                            if (riskReasonText != null &&
+                                riskReasonText.trim().isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                '건강 근거',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.inkMute,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                riskReasonText,
+                                style: const TextStyle(
+                                  fontSize: 13.5,
+                                  height: 1.55,
+                                  color: AppTheme.inkSoft,
+                                ),
+                              ),
+                            ],
+                            if (riskEvidenceText != null &&
+                                riskEvidenceText.trim().isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              const Text(
+                                '출처',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.inkMute,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                riskEvidenceText,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  height: 1.4,
+                                  color: AppTheme.inkMute,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

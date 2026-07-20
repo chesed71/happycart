@@ -191,4 +191,103 @@ void main() {
       expect(find.byKey(const ValueKey('flagcard-risk-bar')), findsNothing);
     });
   });
+
+  group('펼침 영역 건강 근거 병기', () {
+    testWidgets(
+      '펼친 카드에 기존 reason·RULE 이 유지되고 그 아래 건강 근거·출처가 병기된다(실 카탈로그: hydrogenated)',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ResultPage(
+              state: ResultState.success(
+                _product(
+                  // hydrogenated 는 riskLevel.high 라 정렬 최상위 → 첫 카드
+                  // (자동 펼침)가 된다.
+                  badIngredients: const ['hydrogenated'],
+                  reasonCodes: const [],
+                ),
+              ),
+              onRescan: () {},
+            ),
+          ),
+        );
+
+        // (a) 기존 reason·RULE 표시가 대체되지 않고 여전히 남아 있다.
+        expect(find.text('경화 처리 과정에서 트랜스지방이 생성될 수 있어요.'), findsOneWidget);
+        expect(find.text('RULE: hydrogenated_oil'), findsOneWidget);
+
+        // (b) 그 아래 건강 근거·출처가 병기된다 — badIngredientCatalog의
+        // hydrogenated 엔트리 실값.
+        expect(find.text('건강 근거'), findsOneWidget);
+        expect(
+          find.text('심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
+          findsOneWidget,
+        );
+        expect(find.text('출처'), findsOneWidget);
+        expect(find.text('WHO REPLACE; FDA PHO; AHA'), findsOneWidget);
+      },
+    );
+
+    testWidgets('FlagCard: riskEvidence가 빈/null이면 출처 줄만 생략되고 카드는 정상 렌더', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FlagCard(
+              name: '테스트 성분',
+              tag: '테스트태그',
+              reason: '테스트 사유',
+              ruleCode: 'test_code',
+              dotBg: const Color(0xFFFCE5E1),
+              dotFg: const Color(0xFF9E2D22),
+              riskLevel: RiskLevel.medium,
+              riskReason: '테스트 위험 사유',
+              riskEvidence: '   ', // 공백뿐 — null과 동일하게 취급돼야 함
+              isOpen: true,
+              onToggle: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('테스트 성분'), findsOneWidget);
+      expect(find.text('테스트 사유'), findsOneWidget);
+      expect(find.text('RULE: test_code'), findsOneWidget);
+      expect(find.text('건강 근거'), findsOneWidget);
+      expect(find.text('테스트 위험 사유'), findsOneWidget);
+      expect(find.text('출처'), findsNothing);
+    });
+
+    testWidgets('FlagCard: riskReason이 null이면 건강 근거 줄만 생략되고 카드는 정상 렌더', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FlagCard(
+              name: '테스트 성분',
+              tag: '테스트태그',
+              reason: '테스트 사유',
+              ruleCode: 'test_code',
+              dotBg: const Color(0xFFFCE5E1),
+              dotFg: const Color(0xFF9E2D22),
+              riskLevel: RiskLevel.medium,
+              riskReason: null,
+              riskEvidence: 'WHO',
+              isOpen: true,
+              onToggle: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('테스트 성분'), findsOneWidget);
+      expect(find.text('테스트 사유'), findsOneWidget);
+      expect(find.text('RULE: test_code'), findsOneWidget);
+      expect(find.text('건강 근거'), findsNothing);
+      expect(find.text('출처'), findsOneWidget);
+      expect(find.text('WHO'), findsOneWidget);
+    });
+  });
 }
