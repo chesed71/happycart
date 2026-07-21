@@ -151,7 +151,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             Expanded(child: _buildHero(data, tier, fullscreen: true))
           else ...[
             _buildHero(data, tier, fullscreen: false),
-            Expanded(child: _buildBody(data)),
+            Expanded(child: _buildBody(data, tier)),
           ],
           _buildFooter(context),
         ],
@@ -271,7 +271,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     );
   }
 
-  Widget _buildBody(RiskTierData data) {
+  Widget _buildBody(RiskTierData data, RiskTier tier) {
     final hasBad = _riskDisplays.isNotEmpty;
 
     return SingleChildScrollView(
@@ -279,6 +279,16 @@ class _SuccessLayoutState extends State<_SuccessLayout>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // 단계별 안내 배너 — 성분 목록보다 먼저 안내를 보고 성분을 확인하는 흐름.
+          if (tier != RiskTier.ok) ...[
+            RiskNoteBanner(
+              text: data.bannerText!,
+              bg: data.bannerBg,
+              fg: data.bannerFg,
+            ),
+            const SizedBox(height: 16),
+          ],
+
           // 신경 쓰이는 성분
           if (hasBad) ...[
             _SectionHeader(
@@ -550,6 +560,47 @@ class RiskMeter extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 성분 목록 위 단계별 안내 배너 — 정보 아이콘 + 문구를 [bg] 배경·[fg] 글자색의
+/// 둥근 카드에 담는다. 테스트에서 직접 pump 하기 위해 public.
+class RiskNoteBanner extends StatelessWidget {
+  final String text;
+  final Color bg;
+  final Color fg;
+
+  const RiskNoteBanner({
+    required this.text,
+    required this.bg,
+    required this.fg,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, size: 18, color: fg),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: fg,
+                height: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

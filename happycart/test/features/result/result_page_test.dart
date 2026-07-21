@@ -478,4 +478,68 @@ void main() {
       expect(gaugeFullText('위험도 중간'), findsOneWidget);
     });
   });
+
+  group('안내 배너', () {
+    testWidgets('중간(sugar): 안내 배너 문구가 성분 헤더보다 위에 보인다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(badIngredients: const ['sugar'], reasonCodes: const []),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      const bannerText = '용량 의존형 위험이에요. 가끔·적당량이면 괜찮지만, 자주·많이 드시는 건 피하세요.';
+      expect(find.text(bannerText), findsOneWidget);
+
+      final bannerY = tester.getTopLeft(find.text(bannerText)).dy;
+      final headerY = tester.getTopLeft(find.text('신경 쓰이는 성분')).dy;
+      expect(bannerY, lessThan(headerY));
+    });
+
+    testWidgets('높음(hydrogenated): 안내 배너 문구가 성분 헤더보다 위에 보인다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['hydrogenated'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      const bannerText = '높은 위험이에요. 안전한 섭취 구간이 없어, 되도록 피하는 걸 권해요.';
+      expect(find.text(bannerText), findsOneWidget);
+
+      final bannerY = tester.getTopLeft(find.text(bannerText)).dy;
+      final headerY = tester.getTopLeft(find.text('신경 쓰이는 성분')).dy;
+      expect(bannerY, lessThan(headerY));
+    });
+
+    testWidgets('okay: 안내 배너가 렌더되지 않는다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const [],
+                reasonCodes: const [],
+                verdict: Verdict.okay,
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.byType(RiskNoteBanner), findsNothing);
+    });
+  });
 }
