@@ -330,14 +330,15 @@ void main() {
         expect(find.text('RULE: hydrogenated_oil'), findsNothing);
 
         // (b) 그 아래 건강 근거·출처가 병기된다 — badIngredientCatalog의
-        // hydrogenated 엔트리 실값.
-        expect(find.text('건강 근거'), findsOneWidget);
+        // hydrogenated 엔트리 실값. 라벨("건강 근거"/"출처")은 제거되고
+        // 건강 근거는 '* ' 마커, 출처는 '출처: ' 접두 한 줄로 병기된다.
+        expect(find.text('건강 근거'), findsNothing);
         expect(
-          find.text('심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
+          find.text('* 심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
           findsOneWidget,
         );
-        expect(find.text('출처'), findsOneWidget);
-        expect(find.text('WHO REPLACE; FDA PHO; AHA'), findsOneWidget);
+        expect(find.text('출처'), findsNothing);
+        expect(find.text('출처: WHO REPLACE; FDA PHO; AHA'), findsOneWidget);
       },
     );
 
@@ -365,9 +366,9 @@ void main() {
 
       expect(find.text('테스트 성분'), findsOneWidget);
       expect(find.text('테스트 사유'), findsOneWidget);
-      expect(find.text('건강 근거'), findsOneWidget);
-      expect(find.text('테스트 위험 사유'), findsOneWidget);
-      expect(find.text('출처'), findsNothing);
+      expect(find.text('건강 근거'), findsNothing);
+      expect(find.text('* 테스트 위험 사유'), findsOneWidget);
+      expect(find.textContaining('출처'), findsNothing);
     });
 
     testWidgets('FlagCard: riskReason이 null이면 건강 근거 줄만 생략되고 카드는 정상 렌더', (
@@ -394,9 +395,14 @@ void main() {
 
       expect(find.text('테스트 성분'), findsOneWidget);
       expect(find.text('테스트 사유'), findsOneWidget);
-      expect(find.text('건강 근거'), findsNothing);
-      expect(find.text('출처'), findsOneWidget);
-      expect(find.text('WHO'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Text && (w.data?.startsWith('* ') ?? false),
+        ),
+        findsNothing,
+      );
+      expect(find.text('출처'), findsNothing);
+      expect(find.text('출처: WHO'), findsOneWidget);
     });
   });
 
@@ -659,15 +665,16 @@ void main() {
         );
 
         // 첫 카드(hydrogenated, high) 자동 펼침 — 건강 근거·출처 유지, RULE은 미표시.
+        // 라벨은 제거되고 건강 근거는 '* ' 마커, 출처는 '출처: ' 접두 한 줄.
         expect(find.text('경화 처리 과정에서 트랜스지방이 생성될 수 있어요.'), findsOneWidget);
         expect(find.text('RULE: hydrogenated_oil'), findsNothing);
-        expect(find.text('건강 근거'), findsOneWidget);
+        expect(find.text('건강 근거'), findsNothing);
         expect(
-          find.text('심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
+          find.text('* 심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
           findsOneWidget,
         );
-        expect(find.text('출처'), findsOneWidget);
-        expect(find.text('WHO REPLACE; FDA PHO; AHA'), findsOneWidget);
+        expect(find.text('출처'), findsNothing);
+        expect(find.text('출처: WHO REPLACE; FDA PHO; AHA'), findsOneWidget);
       },
     );
 

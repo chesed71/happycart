@@ -913,18 +913,8 @@ class FlagCard extends StatelessWidget {
                             if (riskReasonText != null &&
                                 riskReasonText.trim().isNotEmpty) ...[
                               const SizedBox(height: 10),
-                              const Text(
-                                '건강 근거',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppTheme.inkMute,
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
                               Text(
-                                riskReasonText,
+                                '* $riskReasonText',
                                 style: const TextStyle(
                                   fontSize: 13.5,
                                   height: 1.55,
@@ -935,18 +925,8 @@ class FlagCard extends StatelessWidget {
                             if (riskEvidenceText != null &&
                                 riskEvidenceText.trim().isNotEmpty) ...[
                               const SizedBox(height: 8),
-                              const Text(
-                                '출처',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppTheme.inkMute,
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
                               Text(
-                                riskEvidenceText,
+                                '출처: $riskEvidenceText',
                                 style: const TextStyle(
                                   fontSize: 12,
                                   height: 1.4,
