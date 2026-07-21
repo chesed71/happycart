@@ -300,17 +300,6 @@ class _SuccessLayoutState extends State<_SuccessLayout>
 
           const SizedBox(height: 22),
           const DisclaimerCard(),
-          const SizedBox(height: 16),
-          const Text(
-            '성분 이름 기준으로 판정해요 · 영양 수치가 아니라\n초가공·인공 첨가물 회피 철학에 기반합니다',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 11.5,
-              color: AppTheme.inkMute,
-              height: 1.6,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
           const SizedBox(height: 8),
         ],
       ),

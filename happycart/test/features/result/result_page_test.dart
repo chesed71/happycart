@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:happycart/app/theme.dart';
+import 'package:happycart/core/disclaimer_card.dart';
 import 'package:happycart/data/models/product_lookup_result.dart';
 import 'package:happycart/features/result/result_page.dart';
 import 'package:happycart/features/result/result_state.dart';
@@ -713,6 +714,19 @@ void main() {
       expect(find.byType(RiskMeter), findsNothing);
       expect(find.byType(RiskNoteBanner), findsNothing);
       expect(find.byType(FlagCard), findsNothing);
+    });
+
+    testWidgets('not_okay: 하단 안내 문구는 제거되고 DisclaimerCard는 그대로 렌더된다', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(state: ResultState.success(_product()), onRescan: () {}),
+        ),
+      );
+
+      expect(find.textContaining('성분 이름 기준으로'), findsNothing);
+      expect(find.byType(DisclaimerCard), findsOneWidget);
     });
   });
 
