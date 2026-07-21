@@ -303,7 +303,6 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                 name: _canonicalLabel(_riskDisplays[i].canonicalKey),
                 tag: rules.reasonCodeLabel(_riskDisplays[i].reasonCode),
                 reason: _reasonDesc(_riskDisplays[i].reasonCode),
-                ruleCode: _riskDisplays[i].reasonCode,
                 dotBg: AppTheme.stopSoft,
                 dotFg: AppTheme.stopDeep,
                 riskLevel: _riskDisplays[i].riskLevel,
@@ -754,7 +753,7 @@ const Map<rules.RiskLevel, _RiskStyle> _riskStyles = {
 };
 
 class FlagCard extends StatelessWidget {
-  final String name, tag, reason, ruleCode;
+  final String name, tag, reason;
   final Color dotBg, dotFg;
   final rules.RiskLevel? riskLevel;
   final String? riskReason;
@@ -766,7 +765,6 @@ class FlagCard extends StatelessWidget {
     required this.name,
     required this.tag,
     required this.reason,
-    required this.ruleCode,
     required this.dotBg,
     required this.dotFg,
     required this.riskLevel,
@@ -876,25 +874,29 @@ class FlagCard extends StatelessWidget {
                               ),
                               const SizedBox(width: 6),
                             ],
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                color: dotBg,
-                                borderRadius: BorderRadius.circular(7),
-                              ),
-                              child: Text(
-                                tag,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: dotFg,
+                            // name과 tag가 같은 문자열이면(예: 카라기난) 헤더에
+                            // 성분명이 중복 표시되므로 태그 배지를 숨긴다.
+                            if (name != tag) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: dotBg,
+                                  borderRadius: BorderRadius.circular(7),
+                                ),
+                                child: Text(
+                                  tag,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: dotFg,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 6),
+                              const SizedBox(width: 6),
+                            ],
                             AnimatedRotation(
                               turns: isOpen ? 0.5 : 0,
                               duration: const Duration(milliseconds: 250),
@@ -921,18 +923,6 @@ class FlagCard extends StatelessWidget {
                                 fontSize: 13.5,
                                 height: 1.55,
                                 color: AppTheme.inkSoft,
-                              ),
-                            ),
-                            const SizedBox(height: 9),
-                            Text(
-                              'RULE: $ruleCode',
-                              style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontFamilyFallback: ['Courier'],
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.inkMute,
-                                letterSpacing: 0.2,
                               ),
                             ),
                             // 건강 근거 병기(대체 아님) — 빈/null 값은 줄 자체를 생략.

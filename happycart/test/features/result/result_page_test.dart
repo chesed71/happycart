@@ -237,7 +237,6 @@ void main() {
               name: '테스트 성분',
               tag: '테스트태그',
               reason: '테스트 사유',
-              ruleCode: 'test_code',
               dotBg: const Color(0xFFFCE5E1),
               dotFg: const Color(0xFF9E2D22),
               riskLevel: null,
@@ -255,6 +254,47 @@ void main() {
       expect(find.text('보통'), findsNothing);
       expect(find.text('낮음'), findsNothing);
       expect(find.byKey(const ValueKey('flagcard-risk-bar')), findsNothing);
+    });
+  });
+
+  group('태그 중복 숨김', () {
+    testWidgets('carrageenan: name과 tag가 같으면 태그 배지가 중복 표시되지 않는다', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['carrageenan'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      // canonicalLabel('carrageenan')과 reasonCodeLabel('carrageenan') 모두
+      // '카라기난' 이라 태그 배지를 표시하면 헤더에 문구가 중복된다 — 배지는
+      // 숨기고 성분명 텍스트만 남아야 한다.
+      expect(find.text('카라기난'), findsOneWidget);
+    });
+
+    testWidgets('설탕: name과 tag가 다르면 태그 배지가 그대로 표시된다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(badIngredients: const ['sugar'], reasonCodes: const []),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('설탕'), findsOneWidget); // 성분명
+      expect(find.text('정제 설탕'), findsOneWidget); // 태그 배지(reasonCodeLabel)
     });
   });
 
@@ -278,9 +318,10 @@ void main() {
           ),
         );
 
-        // (a) 기존 reason·RULE 표시가 대체되지 않고 여전히 남아 있다.
+        // (a) 기존 reason 표시가 대체되지 않고 여전히 남아 있다. RULE 줄은
+        // 개발용이라 화면에서 제거됐다.
         expect(find.text('경화 처리 과정에서 트랜스지방이 생성될 수 있어요.'), findsOneWidget);
-        expect(find.text('RULE: hydrogenated_oil'), findsOneWidget);
+        expect(find.text('RULE: hydrogenated_oil'), findsNothing);
 
         // (b) 그 아래 건강 근거·출처가 병기된다 — badIngredientCatalog의
         // hydrogenated 엔트리 실값.
@@ -304,7 +345,6 @@ void main() {
               name: '테스트 성분',
               tag: '테스트태그',
               reason: '테스트 사유',
-              ruleCode: 'test_code',
               dotBg: const Color(0xFFFCE5E1),
               dotFg: const Color(0xFF9E2D22),
               riskLevel: RiskLevel.medium,
@@ -319,7 +359,7 @@ void main() {
 
       expect(find.text('테스트 성분'), findsOneWidget);
       expect(find.text('테스트 사유'), findsOneWidget);
-      expect(find.text('RULE: test_code'), findsOneWidget);
+      expect(find.text('RULE: test_code'), findsNothing);
       expect(find.text('건강 근거'), findsOneWidget);
       expect(find.text('테스트 위험 사유'), findsOneWidget);
       expect(find.text('출처'), findsNothing);
@@ -335,7 +375,6 @@ void main() {
               name: '테스트 성분',
               tag: '테스트태그',
               reason: '테스트 사유',
-              ruleCode: 'test_code',
               dotBg: const Color(0xFFFCE5E1),
               dotFg: const Color(0xFF9E2D22),
               riskLevel: RiskLevel.medium,
@@ -350,7 +389,7 @@ void main() {
 
       expect(find.text('테스트 성분'), findsOneWidget);
       expect(find.text('테스트 사유'), findsOneWidget);
-      expect(find.text('RULE: test_code'), findsOneWidget);
+      expect(find.text('RULE: test_code'), findsNothing);
       expect(find.text('건강 근거'), findsNothing);
       expect(find.text('출처'), findsOneWidget);
       expect(find.text('WHO'), findsOneWidget);
@@ -615,9 +654,9 @@ void main() {
           findsNWidgets(4),
         );
 
-        // 첫 카드(hydrogenated, high) 자동 펼침 — RULE·건강 근거·출처 유지.
+        // 첫 카드(hydrogenated, high) 자동 펼침 — 건강 근거·출처 유지, RULE은 미표시.
         expect(find.text('경화 처리 과정에서 트랜스지방이 생성될 수 있어요.'), findsOneWidget);
-        expect(find.text('RULE: hydrogenated_oil'), findsOneWidget);
+        expect(find.text('RULE: hydrogenated_oil'), findsNothing);
         expect(find.text('건강 근거'), findsOneWidget);
         expect(
           find.text('심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
