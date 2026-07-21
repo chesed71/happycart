@@ -542,4 +542,112 @@ void main() {
       expect(find.byType(RiskNoteBanner), findsNothing);
     });
   });
+
+  group('통합 시나리오', () {
+    testWidgets(
+      '높음 대표 제품: 히어로 sub·게이지 3칸·배너·성분 카드 4장·첫 카드 펼침이 동시에 high 로 일관 렌더',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ResultPage(
+              state: ResultState.success(
+                _product(
+                  badIngredients: const [
+                    'sugar',
+                    'carrageenan',
+                    'hydrogenated',
+                    'aspartame',
+                  ],
+                  reasonCodes: const [],
+                ),
+              ),
+              onRescan: () {},
+            ),
+          ),
+        );
+
+        // 히어로: 높음 sub 문구.
+        expect(find.text('소량도 위험할 수 있어요. 담지 않는 걸 권해요.'), findsOneWidget);
+
+        // 게이지: 3칸 채움 + "위험도 높음".
+        final gaugeBars = find.byKey(const ValueKey('risk-gauge-bar'));
+        expect(gaugeBars, findsNWidgets(3));
+        Color barColor(int index) {
+          final container = tester
+              .widgetList<Container>(gaugeBars)
+              .elementAt(index);
+          return (container.decoration! as BoxDecoration).color!;
+        }
+
+        expect(barColor(0), AppTheme.stopMain);
+        expect(barColor(1), AppTheme.stopMain);
+        expect(barColor(2), AppTheme.stopMain);
+        expect(
+          find.byWidgetPredicate(
+            (w) => w is Text && w.textSpan?.toPlainText() == '위험도 높음',
+          ),
+          findsOneWidget,
+        );
+
+        // 안내 배너: 높음 문구.
+        expect(
+          find.text('높은 위험이에요. 안전한 섭취 구간이 없어, 되도록 피하는 걸 권해요.'),
+          findsOneWidget,
+        );
+
+        // 성분 카드 4장, 위험도 내림차순(hydrogenated high > aspartame/sugar
+        // medium(canonicalKey 오름차순) > carrageenan low).
+        expect(find.byType(FlagCard), findsNWidgets(4));
+        final hydrogenatedY = tester.getTopLeft(cardName('경화유 / 트랜스지방')).dy;
+        final aspartameY = tester.getTopLeft(cardName('아스파탐')).dy;
+        final sugarY = tester.getTopLeft(cardName('설탕')).dy;
+        final carrageenanY = tester.getTopLeft(cardName('카라기난')).dy;
+        expect(hydrogenatedY, lessThan(aspartameY));
+        expect(aspartameY, lessThan(sugarY));
+        expect(sugarY, lessThan(carrageenanY));
+
+        // 기존 성분 카드 요소 유지: 배지 + 컬러바.
+        expect(find.text('높음'), findsOneWidget);
+        expect(find.text('보통'), findsNWidgets(2));
+        expect(find.text('낮음'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('flagcard-risk-bar')),
+          findsNWidgets(4),
+        );
+
+        // 첫 카드(hydrogenated, high) 자동 펼침 — RULE·건강 근거·출처 유지.
+        expect(find.text('경화 처리 과정에서 트랜스지방이 생성될 수 있어요.'), findsOneWidget);
+        expect(find.text('RULE: hydrogenated_oil'), findsOneWidget);
+        expect(find.text('건강 근거'), findsOneWidget);
+        expect(
+          find.text('심혈관 질환 위험을 높이며 LDL(나쁜 콜레스테롤)을 올리고 HDL(좋은 콜레스테롤)을 낮춥니다.'),
+          findsOneWidget,
+        );
+        expect(find.text('출처'), findsOneWidget);
+        expect(find.text('WHO REPLACE; FDA PHO; AHA'), findsOneWidget);
+      },
+    );
+
+    testWidgets('okay 회귀: 초록 히어로만 렌더되고 게이지·배너·성분 카드는 없다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const [],
+                reasonCodes: const [],
+                verdict: Verdict.okay,
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('괜찮아요'), findsOneWidget);
+      expect(find.byType(RiskMeter), findsNothing);
+      expect(find.byType(RiskNoteBanner), findsNothing);
+      expect(find.byType(FlagCard), findsNothing);
+    });
+  });
 }
