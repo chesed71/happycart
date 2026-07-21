@@ -901,26 +901,12 @@ class FlagCard extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              reason,
-                              style: const TextStyle(
-                                fontSize: 13.5,
-                                height: 1.55,
-                                color: AppTheme.inkSoft,
-                              ),
-                            ),
+                            _BulletText(reason),
                             // 건강 근거 병기(대체 아님) — 빈/null 값은 줄 자체를 생략.
                             if (riskReasonText != null &&
                                 riskReasonText.trim().isNotEmpty) ...[
                               const SizedBox(height: 10),
-                              Text(
-                                '* $riskReasonText',
-                                style: const TextStyle(
-                                  fontSize: 13.5,
-                                  height: 1.55,
-                                  color: AppTheme.inkSoft,
-                                ),
-                              ),
+                              _BulletText(riskReasonText),
                             ],
                             if (riskEvidenceText != null &&
                                 riskEvidenceText.trim().isNotEmpty) ...[
@@ -944,6 +930,32 @@ class FlagCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 불릿(•) + 본문 한 항목. 불릿을 문자열에 이어 붙이지 않고 별도 위젯으로
+/// 분리해, 본문이 줄바꿈돼도 둘째 줄이 불릿이 아닌 본문 시작점에 맞춰
+/// 정렬되도록(hanging indent) 한다.
+class _BulletText extends StatelessWidget {
+  final String text;
+
+  const _BulletText(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    const style = TextStyle(
+      fontSize: 13.5,
+      height: 1.55,
+      color: AppTheme.inkSoft,
+    );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('•', style: style),
+        const SizedBox(width: 8),
+        Expanded(child: Text(text, style: style)),
+      ],
     );
   }
 }
