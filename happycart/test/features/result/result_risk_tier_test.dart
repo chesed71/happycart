@@ -30,7 +30,10 @@ void main() {
     });
 
     test('전부 RiskLevel.low 면 RiskTier.low', () {
-      final displays = [_display('a', RiskLevel.low), _display('b', RiskLevel.low)];
+      final displays = [
+        _display('a', RiskLevel.low),
+        _display('b', RiskLevel.low),
+      ];
       expect(resolveRiskTier(displays), RiskTier.low);
     });
 
