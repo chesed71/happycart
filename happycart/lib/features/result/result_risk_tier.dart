@@ -1,0 +1,143 @@
+/// not_okay 결과 화면의 제품 대표 위험도(RiskTier) 모델.
+///
+/// `okay` 판정은 호출 측에서 [RiskTier.ok] 로 직접 처리하므로 이 파일의
+/// [resolveRiskTier] 는 not_okay 전용이다 — 성분별 위험도([rules.RiskLevel])
+/// 중 가장 높은 값을 제품 대표 위험도로 환산한다.
+library;
+
+import 'package:flutter/material.dart';
+import 'package:happycart_rules/happycart_rules.dart' as rules;
+
+import '../../app/theme.dart';
+
+/// 결과 화면 히어로 톤을 결정하는 대표 위험도 4단계.
+enum RiskTier { ok, low, medium, high }
+
+/// [displays] 중 `riskLevel` 이 가장 높은 값을 [RiskTier] 로 환산한다.
+///
+/// `high` > `medium` > `low` 순. `displays` 가 비어 있거나 `riskLevel` 이
+/// 전부 `null` 이면 방어적으로 [RiskTier.medium] 을 반환한다.
+RiskTier resolveRiskTier(List<rules.IngredientRiskDisplay> displays) {
+  rules.RiskLevel? highest;
+  for (final display in displays) {
+    final level = display.riskLevel;
+    if (level == null) continue;
+    if (highest == null || level.index < highest.index) {
+      highest = level;
+    }
+  }
+
+  switch (highest) {
+    case rules.RiskLevel.high:
+      return RiskTier.high;
+    case rules.RiskLevel.medium:
+      return RiskTier.medium;
+    case rules.RiskLevel.low:
+      return RiskTier.low;
+    case null:
+      return RiskTier.medium;
+  }
+}
+
+/// tier 별 색·문구·에셋 데이터.
+class RiskTierData {
+  /// 히어로 배경 그라디언트 상단색 (하단은 공통 Color(0xFFFCFBF8)).
+  final Color heroTop;
+
+  /// "잠깐" 등 헤드라인 글자색.
+  final Color word;
+
+  /// 카트·손 마크, 게이지 채움 등 강조색.
+  final Color accent;
+
+  /// 헤드라인 아래 부연 문구. ok 는 표시하지 않아 `null`.
+  final String? sub;
+
+  /// 위험도 게이지 채움 칸수 (ok=0, low=1, medium=2, high=3).
+  final int gaugeFilled;
+
+  /// 게이지 옆 라벨. ok 는 게이지 자체를 숨기므로 `null`.
+  final String? gaugeLabel;
+
+  /// 안내 배너 문구. ok 는 배너를 표시하지 않아 `null`.
+  final String? bannerText;
+
+  final Color bannerBg;
+  final Color bannerFg;
+
+  /// 합성 마크 에셋 (카트·손).
+  final String cartAsset;
+  final String handAsset;
+
+  const RiskTierData({
+    required this.heroTop,
+    required this.word,
+    required this.accent,
+    required this.sub,
+    required this.gaugeFilled,
+    required this.gaugeLabel,
+    required this.bannerText,
+    required this.bannerBg,
+    required this.bannerFg,
+    required this.cartAsset,
+    required this.handAsset,
+  });
+}
+
+/// tier → 화면 데이터.
+const Map<RiskTier, RiskTierData> riskTierData = {
+  RiskTier.ok: RiskTierData(
+    // 기존 okay 히어로 값(초록) 그대로 재사용.
+    heroTop: Color(0xFFE7F6EE),
+    word: Color(0xFF0A6B40),
+    accent: Color(0xFF00A05B),
+    sub: null,
+    gaugeFilled: 0,
+    gaugeLabel: null,
+    bannerText: null,
+    bannerBg: AppTheme.okSoft,
+    bannerFg: AppTheme.okDeep,
+    cartAsset: 'assets/verdict/cart_ok.png',
+    handAsset: 'assets/verdict/hand_ok.png',
+  ),
+  RiskTier.low: RiskTierData(
+    heroTop: AppTheme.heroBgLow,
+    word: AppTheme.lowDeep,
+    accent: AppTheme.lowMain,
+    sub: '특정 조건에서만 신경 쓰면 되는 성분이 있어요.',
+    gaugeFilled: 1,
+    gaugeLabel: '위험도 낮음',
+    bannerText: '낮은 위험이에요. 대부분 안전하지만, 자주 드신다면 아래 성분만 가볍게 확인해보세요.',
+    bannerBg: AppTheme.lowSoft,
+    bannerFg: AppTheme.lowDeep,
+    cartAsset: 'assets/verdict/cart_low.png',
+    handAsset: 'assets/verdict/hand_low.png',
+  ),
+  RiskTier.medium: RiskTierData(
+    heroTop: AppTheme.heroBgMed,
+    word: AppTheme.medDeep,
+    accent: AppTheme.medMain,
+    sub: '양에 따라 괜찮을 수도, 아닐 수도 있어요. 적당히 드세요.',
+    gaugeFilled: 2,
+    gaugeLabel: '위험도 중간',
+    bannerText: '용량 의존형 위험이에요. 가끔·적당량이면 괜찮지만, 자주·많이 드시는 건 피하세요.',
+    bannerBg: AppTheme.medSoft,
+    bannerFg: AppTheme.medDeep,
+    cartAsset: 'assets/verdict/cart_med.png',
+    handAsset: 'assets/verdict/hand_med.png',
+  ),
+  RiskTier.high: RiskTierData(
+    // 높음 단계는 기존 stop 계열을 재사용.
+    heroTop: AppTheme.heroBgHigh,
+    word: AppTheme.stopDeep,
+    accent: AppTheme.stopMain,
+    sub: '소량도 위험할 수 있어요. 담지 않는 걸 권해요.',
+    gaugeFilled: 3,
+    gaugeLabel: '위험도 높음',
+    bannerText: '높은 위험이에요. 안전한 섭취 구간이 없어, 되도록 피하는 걸 권해요.',
+    bannerBg: AppTheme.stopSoft,
+    bannerFg: AppTheme.stopDeep,
+    cartAsset: 'assets/verdict/cart_stop.png',
+    handAsset: 'assets/verdict/hand_stop.png',
+  ),
+};

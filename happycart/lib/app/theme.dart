@@ -43,6 +43,23 @@ class AppTheme {
   static const Color stopGradA = Color(0xFFEF5A45);
   static const Color stopGradB = Color(0xFFD23A2C);
 
+  // === 대표 위험도 단계 (낮음/중간) 팔레트 — 높음은 stop 계열 재사용 ===
+  static const Color lowMain = Color(0xFFE1A50B);
+  static const Color lowDeep = Color(0xFF8A6300);
+  static const Color lowSoft = Color(0xFFFBEFC9);
+
+  static const Color medMain = Color(0xFFEE7A1A);
+  static const Color medDeep = Color(0xFFA85400);
+  static const Color medSoft = Color(0xFFFCE7D0);
+
+  // === 위험도 히어로 배경 상단색 (하단은 공통 Color(0xFFFCFBF8)) ===
+  static const Color heroBgLow = Color(0xFFFBF1CF);
+  static const Color heroBgMed = Color(0xFFFCE8D2);
+  static const Color heroBgHigh = Color(0xFFFCE3DE);
+
+  // === 위험도 게이지 빈칸 ===
+  static const Color gaugeEmpty = Color(0xFFE9DECB);
+
   static Color colorFor(Verdict v) {
     switch (v) {
       case Verdict.okay:
