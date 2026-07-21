@@ -199,22 +199,6 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             emptyColor: AppTheme.gaugeEmpty,
           ),
         ],
-        if (data.sub != null) ...[
-          const SizedBox(height: 11),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              data.sub!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: AppTheme.inkSoft,
-                height: 1.5,
-              ),
-            ),
-          ),
-        ],
         const SizedBox(height: 16),
         _ProductNamePill(product: widget.product),
       ],

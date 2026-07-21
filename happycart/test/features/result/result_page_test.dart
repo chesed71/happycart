@@ -95,7 +95,9 @@ void main() {
   );
 
   group('히어로 단계별 톤', () {
-    testWidgets('높음(hydrogenated): 높음 sub 문구 + cart_stop 에셋', (tester) async {
+    testWidgets('높음(hydrogenated): 히어로 sub 미표시(배너와 중복돼 제거됨) + cart_stop 에셋', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: ResultPage(
@@ -110,11 +112,13 @@ void main() {
         ),
       );
 
-      expect(find.text('소량도 위험할 수 있어요. 담지 않는 걸 권해요.'), findsOneWidget);
+      expect(find.text('소량도 위험할 수 있어요. 담지 않는 걸 권해요.'), findsNothing);
       expect(cartAssetImage('assets/verdict/cart_stop.png'), findsOneWidget);
     });
 
-    testWidgets('중간(sugar): 중간 sub 문구 + cart_med 에셋', (tester) async {
+    testWidgets('중간(sugar): 히어로 sub 미표시(배너와 중복돼 제거됨) + cart_med 에셋', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: ResultPage(
@@ -126,11 +130,13 @@ void main() {
         ),
       );
 
-      expect(find.text('양에 따라 괜찮을 수도, 아닐 수도 있어요. 적당히 드세요.'), findsOneWidget);
+      expect(find.text('양에 따라 괜찮을 수도, 아닐 수도 있어요. 적당히 드세요.'), findsNothing);
       expect(cartAssetImage('assets/verdict/cart_med.png'), findsOneWidget);
     });
 
-    testWidgets('낮음(carrageenan): 낮음 sub 문구 + cart_low 에셋', (tester) async {
+    testWidgets('낮음(carrageenan): 히어로 sub 미표시(배너와 중복돼 제거됨) + cart_low 에셋', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: ResultPage(
@@ -145,7 +151,7 @@ void main() {
         ),
       );
 
-      expect(find.text('특정 조건에서만 신경 쓰면 되는 성분이 있어요.'), findsOneWidget);
+      expect(find.text('특정 조건에서만 신경 쓰면 되는 성분이 있어요.'), findsNothing);
       expect(cartAssetImage('assets/verdict/cart_low.png'), findsOneWidget);
     });
   });
@@ -300,7 +306,7 @@ void main() {
 
   group('펼침 영역 건강 근거 병기', () {
     testWidgets(
-      '펼친 카드에 기존 reason·RULE 이 유지되고 그 아래 건강 근거·출처가 병기된다(실 카탈로그: hydrogenated)',
+      '펼친 카드에 reason 은 유지되고 RULE 은 표시되지 않으며 그 아래 건강 근거·출처가 병기된다(실 카탈로그: hydrogenated)',
       (tester) async {
         await tester.pumpWidget(
           MaterialApp(
@@ -359,7 +365,6 @@ void main() {
 
       expect(find.text('테스트 성분'), findsOneWidget);
       expect(find.text('테스트 사유'), findsOneWidget);
-      expect(find.text('RULE: test_code'), findsNothing);
       expect(find.text('건강 근거'), findsOneWidget);
       expect(find.text('테스트 위험 사유'), findsOneWidget);
       expect(find.text('출처'), findsNothing);
@@ -389,7 +394,6 @@ void main() {
 
       expect(find.text('테스트 성분'), findsOneWidget);
       expect(find.text('테스트 사유'), findsOneWidget);
-      expect(find.text('RULE: test_code'), findsNothing);
       expect(find.text('건강 근거'), findsNothing);
       expect(find.text('출처'), findsOneWidget);
       expect(find.text('WHO'), findsOneWidget);
@@ -584,7 +588,7 @@ void main() {
 
   group('통합 시나리오', () {
     testWidgets(
-      '높음 대표 제품: 히어로 sub·게이지 3칸·배너·성분 카드 4장·첫 카드 펼침이 동시에 high 로 일관 렌더',
+      '높음 대표 제품: 게이지 3칸·배너·성분 카드 4장·첫 카드 펼침이 동시에 high 로 일관 렌더',
       (tester) async {
         await tester.pumpWidget(
           MaterialApp(
@@ -605,8 +609,8 @@ void main() {
           ),
         );
 
-        // 히어로: 높음 sub 문구.
-        expect(find.text('소량도 위험할 수 있어요. 담지 않는 걸 권해요.'), findsOneWidget);
+        // 히어로: sub 문구는 배너와 중복돼 제거됐다.
+        expect(find.text('소량도 위험할 수 있어요. 담지 않는 걸 권해요.'), findsNothing);
 
         // 게이지: 3칸 채움 + "위험도 높음".
         final gaugeBars = find.byKey(const ValueKey('risk-gauge-bar'));

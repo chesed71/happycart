@@ -50,9 +50,6 @@ class RiskTierData {
   /// 카트·손 마크, 게이지 채움 등 강조색.
   final Color accent;
 
-  /// 헤드라인 아래 부연 문구. ok 는 표시하지 않아 `null`.
-  final String? sub;
-
   /// 위험도 게이지 채움 칸수 (ok=0, low=1, medium=2, high=3).
   final int gaugeFilled;
 
@@ -73,7 +70,6 @@ class RiskTierData {
     required this.heroTop,
     required this.word,
     required this.accent,
-    required this.sub,
     required this.gaugeFilled,
     required this.gaugeLabel,
     required this.bannerText,
@@ -91,7 +87,6 @@ const Map<RiskTier, RiskTierData> riskTierData = {
     heroTop: Color(0xFFE7F6EE),
     word: Color(0xFF0A6B40),
     accent: Color(0xFF00A05B),
-    sub: null,
     gaugeFilled: 0,
     gaugeLabel: null,
     bannerText: null,
@@ -104,7 +99,6 @@ const Map<RiskTier, RiskTierData> riskTierData = {
     heroTop: AppTheme.heroBgLow,
     word: AppTheme.lowDeep,
     accent: AppTheme.lowMain,
-    sub: '특정 조건에서만 신경 쓰면 되는 성분이 있어요.',
     gaugeFilled: 1,
     gaugeLabel: '위험도 낮음',
     bannerText: '낮은 위험이에요. 대부분 안전하지만, 자주 드신다면 아래 성분만 가볍게 확인해보세요.',
@@ -117,7 +111,6 @@ const Map<RiskTier, RiskTierData> riskTierData = {
     heroTop: AppTheme.heroBgMed,
     word: AppTheme.medDeep,
     accent: AppTheme.medMain,
-    sub: '양에 따라 괜찮을 수도, 아닐 수도 있어요. 적당히 드세요.',
     gaugeFilled: 2,
     gaugeLabel: '위험도 중간',
     bannerText: '용량 의존형 위험이에요. 가끔·적당량이면 괜찮지만, 자주·많이 드시는 건 피하세요.',
@@ -131,7 +124,6 @@ const Map<RiskTier, RiskTierData> riskTierData = {
     heroTop: AppTheme.heroBgHigh,
     word: AppTheme.stopDeep,
     accent: AppTheme.stopMain,
-    sub: '소량도 위험할 수 있어요. 담지 않는 걸 권해요.',
     gaugeFilled: 3,
     gaugeLabel: '위험도 높음',
     bannerText: '높은 위험이에요. 안전한 섭취 구간이 없어, 되도록 피하는 걸 권해요.',
