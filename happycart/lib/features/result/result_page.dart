@@ -190,6 +190,15 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             height: 1.0,
           ),
         ),
+        if (tier != RiskTier.ok) ...[
+          const SizedBox(height: 10),
+          RiskMeter(
+            filled: data.gaugeFilled,
+            label: data.gaugeLabel!.replaceFirst('위험도 ', ''),
+            fillColor: data.accent,
+            emptyColor: AppTheme.gaugeEmpty,
+          ),
+        ],
         if (data.sub != null) ...[
           const SizedBox(height: 11),
           Padding(
@@ -479,6 +488,70 @@ class _VerdictHeroArt extends StatelessWidget {
   Widget _fallback() => const Center(
     child: Icon(Icons.shopping_bag_outlined, size: 30, color: AppTheme.inkMute),
   );
+}
+
+/// 히어로 위험도 게이지 — 3칸 막대(앞에서부터 [filled]개는 [fillColor], 나머지는
+/// [emptyColor]) + 우측 "위험도 **label**" 텍스트. 테스트에서 직접 pump 하기
+/// 위해 public.
+class RiskMeter extends StatelessWidget {
+  final int filled;
+  final String label;
+  final Color fillColor;
+  final Color emptyColor;
+
+  const RiskMeter({
+    required this.filled,
+    required this.label,
+    required this.fillColor,
+    required this.emptyColor,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < 3; i++) ...[
+          if (i > 0) const SizedBox(width: 4),
+          // 3칸 전부 ValueKey('risk-gauge-bar') 를 공유하므로, Row 의 직속
+          // 자식(다중 자식 엘리먼트)에 두면 "Duplicate keys" 단언에 걸린다 —
+          // 키를 한 겹 안쪽(SizedBox 의 단일 자식)으로 옮겨 회피한다.
+          SizedBox(
+            width: 22,
+            height: 6,
+            child: Container(
+              key: const ValueKey('risk-gauge-bar'),
+              decoration: BoxDecoration(
+                color: i < filled ? fillColor : emptyColor,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(width: 8),
+        Text.rich(
+          TextSpan(
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.inkSoft,
+            ),
+            children: [
+              const TextSpan(text: '위험도 '),
+              TextSpan(
+                text: label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.ink,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// 제품 이름 pill — "**제품명** · 브랜드".

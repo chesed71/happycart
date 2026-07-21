@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:happycart/app/theme.dart';
 import 'package:happycart/data/models/product_lookup_result.dart';
 import 'package:happycart/features/result/result_page.dart';
 import 'package:happycart/features/result/result_state.dart';
@@ -9,6 +10,7 @@ ProductLookupResult _product({
   String? imageUrl,
   List<String> badIngredients = const ['blue_1', 'sugar'],
   List<String> reasonCodes = const ['artificial_color', 'refined_sugar'],
+  Verdict verdict = Verdict.notOkay,
 }) => ProductLookupResult(
   barcode: '8809990172030',
   brand: '웰코리아',
@@ -16,7 +18,7 @@ ProductLookupResult _product({
   size: '9g',
   category: '캔디류',
   imageUrl: imageUrl,
-  verdict: Verdict.notOkay,
+  verdict: verdict,
   badIngredients: badIngredients,
   reasonCodes: reasonCodes,
   ruleVersion: 'v1.1.0',
@@ -352,6 +354,128 @@ void main() {
       expect(find.text('건강 근거'), findsNothing);
       expect(find.text('출처'), findsOneWidget);
       expect(find.text('WHO'), findsOneWidget);
+    });
+  });
+
+  group('위험도 게이지', () {
+    // 3칸 막대는 전부 같은 ValueKey 를 쓰므로, 렌더 순서대로 색을 비교한다.
+    Finder gaugeBars() => find.byKey(const ValueKey('risk-gauge-bar'));
+    Color barColor(WidgetTester tester, int index) {
+      final container = tester.widgetList<Container>(gaugeBars()).elementAt(index);
+      return (container.decoration! as BoxDecoration).color!;
+    }
+
+    // "위험도 <라벨>" 전체 문구를 Text.rich 의 최종 렌더 텍스트로 검증한다 —
+    // FlagCard 위험도 배지(높음/보통/낮음)와 문자열이 겹칠 수 있어 plain
+    // find.text 대신 전체 문구 일치로 모호성을 없앤다.
+    Finder gaugeFullText(String text) => find.byWidgetPredicate(
+      (w) => w is Text && w.textSpan?.toPlainText() == text,
+    );
+
+    testWidgets('높음(hydrogenated): 게이지 3칸 채움 + "위험도 높음"', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['hydrogenated'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(gaugeBars(), findsNWidgets(3));
+      expect(barColor(tester, 0), AppTheme.stopMain);
+      expect(barColor(tester, 1), AppTheme.stopMain);
+      expect(barColor(tester, 2), AppTheme.stopMain);
+      expect(gaugeFullText('위험도 높음'), findsOneWidget);
+    });
+
+    testWidgets('중간(sugar): 게이지 2칸 채움 + "위험도 중간"', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(badIngredients: const ['sugar'], reasonCodes: const []),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(gaugeBars(), findsNWidgets(3));
+      expect(barColor(tester, 0), AppTheme.medMain);
+      expect(barColor(tester, 1), AppTheme.medMain);
+      expect(barColor(tester, 2), AppTheme.gaugeEmpty);
+      expect(gaugeFullText('위험도 중간'), findsOneWidget);
+    });
+
+    testWidgets('낮음(carrageenan): 게이지 1칸 채움 + "위험도 낮음"', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['carrageenan'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(gaugeBars(), findsNWidgets(3));
+      expect(barColor(tester, 0), AppTheme.lowMain);
+      expect(barColor(tester, 1), AppTheme.gaugeEmpty);
+      expect(barColor(tester, 2), AppTheme.gaugeEmpty);
+      expect(gaugeFullText('위험도 낮음'), findsOneWidget);
+    });
+
+    testWidgets('okay: 게이지가 렌더되지 않는다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const [],
+                reasonCodes: const [],
+                verdict: Verdict.okay,
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.byType(RiskMeter), findsNothing);
+      expect(gaugeBars(), findsNothing);
+    });
+
+    testWidgets('RiskMeter 직접 pump: filled 개수만큼 fillColor, 나머지는 emptyColor', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: RiskMeter(
+              filled: 2,
+              label: '중간',
+              fillColor: Color(0xFFEE7A1A),
+              emptyColor: Color(0xFFE9DECB),
+            ),
+          ),
+        ),
+      );
+
+      expect(gaugeBars(), findsNWidgets(3));
+      expect(barColor(tester, 0), const Color(0xFFEE7A1A));
+      expect(barColor(tester, 1), const Color(0xFFEE7A1A));
+      expect(barColor(tester, 2), const Color(0xFFE9DECB));
+      expect(gaugeFullText('위험도 중간'), findsOneWidget);
     });
   });
 }
