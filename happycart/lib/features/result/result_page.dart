@@ -685,17 +685,20 @@ class _SectionHeader extends StatelessWidget {
               ),
             ),
           ),
-          if (hint != null) ...[
-            const Spacer(),
-            Text(
-              hint!,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppTheme.inkMute,
-                fontWeight: FontWeight.w500,
+          if (hint != null)
+            Expanded(
+              child: Text(
+                hint!,
+                textAlign: TextAlign.right,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.inkMute,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
-          ],
         ],
       ),
     );

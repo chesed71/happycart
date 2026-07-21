@@ -715,4 +715,39 @@ void main() {
       expect(find.byType(FlagCard), findsNothing);
     });
   });
+
+  group('좁은 화면(360dp) 섹션 헤더 오버플로', () {
+    // 이 그룹만 좁은 폭(360x800)으로 뷰포트를 덮어쓴다 — 바깥 setUp(1080x2400)과
+    // 간섭하지 않도록 그룹 전용 setUp/tearDown으로 격리한다.
+    setUp(() {
+      final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.physicalSize = const Size(360, 800);
+      view.devicePixelRatio = 1.0;
+    });
+    tearDown(() {
+      final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.resetPhysicalSize();
+      view.resetDevicePixelRatio();
+    });
+
+    testWidgets('높음(hydrogenated) 자동 펼침 카드의 "신경 쓰이는 성분" 헤더가 hint와 함께 가로 오버플로하지 않는다', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['hydrogenated'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+    });
+  });
 }
