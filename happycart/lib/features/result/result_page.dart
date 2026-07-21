@@ -6,6 +6,7 @@ import '../../app/theme.dart';
 import '../../core/disclaimer_card.dart';
 import '../../core/verdict.dart';
 import '../../data/models/product_lookup_result.dart';
+import 'result_risk_tier.dart';
 import 'result_state.dart';
 
 // ────────────────────────────────────────────────────────────────
@@ -36,72 +37,6 @@ class ResultPage extends StatelessWidget {
         ),
       },
     );
-  }
-}
-
-// ────────────────────────────────────────────────────────────────
-// Verdict 테마 (ok / stop) — 라이트 톤 히어로 + 카트·손 합성 마크
-// ────────────────────────────────────────────────────────────────
-class _VT {
-  /// 히어로 라이트 톤 배경 그라디언트.
-  final Color heroA, heroB;
-
-  /// verdict 단어 색 (deep).
-  final Color word;
-
-  /// count 배지 등 강조색.
-  final Color accent;
-
-  /// flag dot/tag 배경·글자.
-  final Color soft, softFg;
-
-  final String wordText;
-  final String? sub;
-
-  /// 합성 마크 에셋 (카트·손).
-  final String cartAsset, handAsset;
-
-  const _VT({
-    required this.heroA,
-    required this.heroB,
-    required this.word,
-    required this.accent,
-    required this.soft,
-    required this.softFg,
-    required this.wordText,
-    required this.cartAsset,
-    required this.handAsset,
-    this.sub,
-  });
-}
-
-_VT _vt(Verdict v) {
-  switch (v) {
-    case Verdict.okay:
-      return const _VT(
-        heroA: Color(0xFFE7F6EE),
-        heroB: Color(0xFFFCFBF8),
-        word: Color(0xFF0A6B40),
-        accent: Color(0xFF00A05B),
-        soft: AppTheme.okSoft,
-        softFg: Color(0xFF0A6B40),
-        wordText: '괜찮아요',
-        cartAsset: 'assets/verdict/cart_ok.png',
-        handAsset: 'assets/verdict/hand_ok.png',
-      );
-    case Verdict.notOkay:
-      return const _VT(
-        heroA: Color(0xFFFCEAE6),
-        heroB: Color(0xFFFCFBF8),
-        word: AppTheme.stopDeep,
-        accent: AppTheme.stopMain,
-        soft: AppTheme.stopSoft,
-        softFg: AppTheme.stopDeep,
-        wordText: '잠깐',
-        sub: '초가공·인공 첨가물이 여러 개 들어 있어요.',
-        cartAsset: 'assets/verdict/cart_stop.png',
-        handAsset: 'assets/verdict/hand_stop.png',
-      );
   }
 }
 
@@ -201,7 +136,10 @@ class _SuccessLayoutState extends State<_SuccessLayout>
 
   @override
   Widget build(BuildContext context) {
-    final theme = _vt(widget.product.verdict);
+    final tier = widget.product.verdict == Verdict.okay
+        ? RiskTier.ok
+        : resolveRiskTier(_riskDisplays);
+    final data = riskTierData[tier]!;
     final isOk = widget.product.verdict == Verdict.okay;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       // 라이트 톤 히어로 — status bar 아이콘은 어둡게.
@@ -210,10 +148,10 @@ class _SuccessLayoutState extends State<_SuccessLayout>
         children: [
           if (isOk)
             // 괜찮아요: 성분/설명 없이 합성 이미지를 화면 정중앙에.
-            Expanded(child: _buildHero(theme, fullscreen: true))
+            Expanded(child: _buildHero(data, tier, fullscreen: true))
           else ...[
-            _buildHero(theme, fullscreen: false),
-            Expanded(child: _buildBody(theme)),
+            _buildHero(data, tier, fullscreen: false),
+            Expanded(child: _buildBody(data)),
           ],
           _buildFooter(context),
         ],
@@ -221,8 +159,13 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     );
   }
 
-  Widget _buildHero(_VT theme, {required bool fullscreen}) {
+  Widget _buildHero(
+    RiskTierData data,
+    RiskTier tier, {
+    required bool fullscreen,
+  }) {
     final topPad = MediaQuery.viewPaddingOf(context).top;
+    final wordText = tier == RiskTier.ok ? '괜찮아요' : '잠깐';
     final content = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -230,7 +173,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
         ScaleTransition(
           scale: _badgeScale,
           child: _VerdictHeroArt(
-            theme: theme,
+            data: data,
             imageUrl: widget.product.imageUrl,
             productName: widget.product.name,
             size: fullscreen ? 300 : 264,
@@ -238,21 +181,21 @@ class _SuccessLayoutState extends State<_SuccessLayout>
         ),
         const SizedBox(height: 8),
         Text(
-          theme.wordText,
+          wordText,
           style: TextStyle(
             fontSize: 42,
             fontWeight: FontWeight.w800,
-            color: theme.word,
+            color: data.word,
             letterSpacing: -0.84,
             height: 1.0,
           ),
         ),
-        if (theme.sub != null) ...[
+        if (data.sub != null) ...[
           const SizedBox(height: 11),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Text(
-              theme.sub!,
+              data.sub!,
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 15,
@@ -273,7 +216,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [theme.heroA, theme.heroB],
+          colors: [data.heroTop, const Color(0xFFFCFBF8)],
         ),
         borderRadius: fullscreen
             ? null
@@ -319,7 +262,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     );
   }
 
-  Widget _buildBody(_VT theme) {
+  Widget _buildBody(RiskTierData data) {
     final hasBad = _riskDisplays.isNotEmpty;
 
     return SingleChildScrollView(
@@ -333,7 +276,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
               title: '신경 쓰이는 성분',
               count: _riskDisplays.length,
               hint: '탭하면 이유를 볼 수 있어요',
-              countColor: theme.accent,
+              countColor: data.accent,
             ),
             for (int i = 0; i < _riskDisplays.length; i++) ...[
               if (i > 0) const SizedBox(height: 10),
@@ -342,8 +285,8 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                 tag: rules.reasonCodeLabel(_riskDisplays[i].reasonCode),
                 reason: _reasonDesc(_riskDisplays[i].reasonCode),
                 ruleCode: _riskDisplays[i].reasonCode,
-                dotBg: theme.soft,
-                dotFg: theme.softFg,
+                dotBg: AppTheme.stopSoft,
+                dotFg: AppTheme.stopDeep,
                 riskLevel: _riskDisplays[i].riskLevel,
                 riskReason: _riskDisplays[i].riskReason,
                 riskEvidence: _riskDisplays[i].riskEvidence,
@@ -453,12 +396,12 @@ class _IconBtn extends StatelessWidget {
 /// 히어로 합성 — 흰 원형 배지 안에 [카트(뒤) · 제품 이미지(가운데 슬롯) · 손(앞)]을
 /// verdict 색 마크로 쌓는다. 제품이 바뀌어도 슬롯의 이미지만 교체된다.
 class _VerdictHeroArt extends StatelessWidget {
-  final _VT theme;
+  final RiskTierData data;
   final String? imageUrl;
   final String productName;
   final double size;
   const _VerdictHeroArt({
-    required this.theme,
+    required this.data,
     required this.imageUrl,
     required this.productName,
     required this.size,
@@ -516,7 +459,7 @@ class _VerdictHeroArt extends StatelessWidget {
               Positioned(
                 bottom: size * 0.05,
                 right: size * 0.12,
-                child: Image.asset(theme.cartAsset, width: size * 0.60),
+                child: Image.asset(data.cartAsset, width: size * 0.60),
               ),
               // 제품 이미지 (원 중앙)
               Align(alignment: Alignment.center, child: productImg),
@@ -524,7 +467,7 @@ class _VerdictHeroArt extends StatelessWidget {
               Positioned(
                 top: size * 0.13,
                 left: size * 0.13,
-                child: Image.asset(theme.handAsset, width: size * 0.40),
+                child: Image.asset(data.handAsset, width: size * 0.40),
               ),
             ],
           ),

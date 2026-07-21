@@ -84,6 +84,70 @@ void main() {
     expect(find.byIcon(Icons.shopping_bag_outlined), findsOneWidget);
   });
 
+  // 카트 마크(Image.asset) 경로를 AssetImage 로 비교한다.
+  Finder cartAssetImage(String path) => find.byWidgetPredicate(
+    (w) =>
+        w is Image &&
+        w.image is AssetImage &&
+        (w.image as AssetImage).assetName == path,
+  );
+
+  group('히어로 단계별 톤', () {
+    testWidgets('높음(hydrogenated): 높음 sub 문구 + cart_stop 에셋', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['hydrogenated'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('소량도 위험할 수 있어요. 담지 않는 걸 권해요.'), findsOneWidget);
+      expect(cartAssetImage('assets/verdict/cart_stop.png'), findsOneWidget);
+    });
+
+    testWidgets('중간(sugar): 중간 sub 문구 + cart_med 에셋', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(badIngredients: const ['sugar'], reasonCodes: const []),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('양에 따라 괜찮을 수도, 아닐 수도 있어요. 적당히 드세요.'), findsOneWidget);
+      expect(cartAssetImage('assets/verdict/cart_med.png'), findsOneWidget);
+    });
+
+    testWidgets('낮음(carrageenan): 낮음 sub 문구 + cart_low 에셋', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['carrageenan'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('특정 조건에서만 신경 쓰면 되는 성분이 있어요.'), findsOneWidget);
+      expect(cartAssetImage('assets/verdict/cart_low.png'), findsOneWidget);
+    });
+  });
+
   testWidgets('황색 canonical label: yellow_5→황색4호, yellow_6→황색5호 (KR 번호 교정)', (
     tester,
   ) async {
