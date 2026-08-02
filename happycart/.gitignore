@@ -54,3 +54,13 @@ app.*.map.json
 # .env.example 은 커밋 가능 (예외)
 !.env.example
 
+# fastlane — Play Developer API service account 키는 절대 커밋 금지(비밀).
+# 키는 repo 밖 ~/.config/happycart/play-service-account.json 에 보관하지만,
+# 실수로 repo 안에 두더라도 커밋되지 않도록 패턴으로 이중 방어한다.
+**/play-service-account*.json
+# fastlane 실행 생성물.
+android/fastlane/report.xml
+android/fastlane/Preview.html
+android/fastlane/screenshots
+android/fastlane/test_output
+
