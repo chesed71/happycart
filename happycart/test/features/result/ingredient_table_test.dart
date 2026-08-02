@@ -53,5 +53,20 @@ void main() {
       expect(entries.first.text, '설탕');
       expect(entries.first.mark, IngredientMark.bad);
     });
+
+    test('닫히지 않은 괄호(malformed) — 정상 조각은 보존, 안 닫힌 뒷부분은 원문 그대로 한 조각', () {
+      // best-effort: 억지 재분리로 정상 괄호 그룹을 깨지 않는다. 앞의 정상 분리
+      // ("설탕", "밀가루(밀:미국산,호주산)")는 그대로 유지되고, 안 닫힌 괄호부터는
+      // 원문 그대로 한 조각("향료(잔여, 물")으로 노출한다.
+      final entries = buildIngredientTable(
+        '설탕, 밀가루(밀:미국산,호주산), 향료(잔여, 물',
+        badKeys: const [],
+        goodKeys: const [],
+      );
+      expect(
+        entries.map((e) => e.text).toList(),
+        ['설탕', '밀가루(밀:미국산,호주산)', '향료(잔여, 물'],
+      );
+    });
   });
 }

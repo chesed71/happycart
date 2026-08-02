@@ -22,7 +22,10 @@ RiskTier resolveRiskTier(List<rules.IngredientRiskDisplay> displays) {
   for (final display in displays) {
     final level = display.riskLevel;
     if (level == null) continue;
-    if (highest == null || level.index < highest.index) {
+    // enum 선언 순서(.index)에 기대지 않고 룰 패키지의 명시적 순위 함수를
+    // 재사용한다 — rank 가 작을수록 높은 위험(high=0).
+    if (highest == null ||
+        rules.riskSortRank(level) < rules.riskSortRank(highest)) {
       highest = level;
     }
   }

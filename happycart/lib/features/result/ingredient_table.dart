@@ -96,5 +96,9 @@ List<String> _splitTopLevel(String raw) {
     buffer.write(ch);
   }
   if (buffer.isNotEmpty) result.add(buffer.toString());
+  // 닫히지 않은 괄호가 있으면(malformed raw) 그 지점부터 이후 쉼표가 마지막 한
+  // 조각에 흡수된다. 억지로 재분리하면 그 안의 정상 괄호 그룹까지 깨질 수 있어,
+  // best-effort 결과를 그대로 둔다 — 정상 조각은 항상 보존하고 안 닫힌 뒷부분만
+  // 원문 그대로 한 조각으로 노출한다.
   return result;
 }
