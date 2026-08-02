@@ -118,7 +118,7 @@
 기존 HappyCart Flutter 앱에 Admin flavor 또는 권한 기반 화면 추가.
 
 **진입점 옵션**:
-- (A) Admin flavor 빌드 (`com.rimonhouse.happycart.admin`) — 본인 디바이스만
+- (A) Admin flavor 빌드 (`kr.happycart.admin`) — 본인 디바이스만
 - (B) 일반 빌드의 "..." 메뉴 (debug build 만 노출)
 - (C) 일반 빌드 + Supabase Auth 로 admin 권한 확인
 

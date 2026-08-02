@@ -30,3 +30,13 @@ Thumbs.db
 
 # 견적서 (PDF/HTML, 로컬 전용 — git 추적 제외)
 docs/Quote/
+
+# Node (로컬 도구 전용 — codex 런타임 심링크 포함)
+node_modules
+
+# 로컬 작업 산출물·스크립트 (git 추적 제외)
+outputs/
+scripts/
+
+# superpowers 로컬 plan 문서 (spec 만 추적)
+docs/superpowers/plans/

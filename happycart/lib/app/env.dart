@@ -47,13 +47,15 @@ class Env {
     String? flavorOverride,
     EnvFileLoader? loader,
   }) async {
-    final resolved =
-        flavorOverride ?? const String.fromEnvironment('FLAVOR');
+    final explicitFlavor = const String.fromEnvironment('FLAVOR');
+    final flutterFlavor = const String.fromEnvironment('FLUTTER_APP_FLAVOR');
+    final resolved = flavorOverride ??
+        (explicitFlavor.isNotEmpty ? explicitFlavor : flutterFlavor);
 
     if (resolved.isEmpty) {
       throw EnvLoadException(
-        'FLAVOR is not set. Pass --dart-define=FLAVOR=development|staging|production '
-        '(or flavorOverride in tests).',
+        'FLAVOR is not set. Pass --flavor development|staging|production, '
+        '--dart-define=FLAVOR=development|staging|production, or flavorOverride in tests.',
       );
     }
     if (!_supportedFlavors.contains(resolved)) {

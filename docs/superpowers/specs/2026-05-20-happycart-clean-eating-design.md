@@ -38,7 +38,7 @@
 | 한글 폰트 | Pretendard |
 | 첫 화면 | 스캔 화면 (홈/검색/저장/프로필 없음) |
 | 스캔 이력 저장 | 사용자별 이력 없음. 익명 집계만 |
-| 패키지/Bundle ID | `com.rimonhouse.happycart` |
+| 패키지/Bundle ID | `kr.happycart` |
 
 ---
 
@@ -544,7 +544,7 @@ HappyCart 아이콘의 오렌지를 메인 브랜드 컬러로 채택. EatSafe�
 | 미등록 메시지 | "아직 등록되지 않은 제품이에요" | "해피카트에서 이 물건을 찾을 수 없습니다" |
 | 브랜드 컬러 | warm 베이지 (#F4EFE6) | 오렌지 (#FF7A1A) |
 | 아이콘 | EatSafe 마스코트 (없음 — 텍스트) | OK 손 + 쇼핑카트 (`happy-cart.png`) |
-| Bundle ID | `com.eatsafe.*` | `com.rimonhouse.happycart` |
+| Bundle ID | `com.eatsafe.*` | `kr.happycart` |
 | Supabase | EatSafe dev/staging/prod | HappyCart 전용 신규 dev/staging/prod |
 | 면책 강조점 | 의학/어린이 식이 | clean-eating 철학의 과학적 논쟁 가능성 |
 

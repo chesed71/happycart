@@ -1,15 +1,15 @@
 {
   "projects": {
-    "default": "happycart-dev"
+    "default": "happycart-app-f48d3"
   },
   "targets": {
-    "happycart-dev": {
+    "happycart-app-f48d3": {
       "hosting": {
         "prod": [
-          "happycart-prod"
+          "happycart-app-prod"
         ],
         "dev": [
-          "happycart-dev"
+          "happycart-app-dev"
         ]
       }
     }

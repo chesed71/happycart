@@ -1,0 +1,48 @@
+default_platform(:android)
+
+# Flutter 프로젝트 루트(happycart/) — 이 Fastfile 은 android/fastlane 에 있으므로 두 단계 위.
+FLUTTER_ROOT = File.expand_path("../..", __dir__)
+AAB_PATH = File.join(
+  FLUTTER_ROOT,
+  "build/app/outputs/bundle/productionRelease/app-production-release.aab"
+)
+
+# production flavor AAB 를 빌드한다. flavor 는 --flavor 와 --dart-define 둘 다 필요.
+def build_production_aab
+  Dir.chdir(FLUTTER_ROOT) do
+    sh("flutter", "build", "appbundle",
+       "--flavor", "production",
+       "--dart-define=FLAVOR=production")
+  end
+end
+
+platform :android do
+  desc "production AAB 빌드 후 Play 내부 테스트 트랙에 draft 업로드"
+  lane :internal do
+    build_production_aab
+    upload_to_play_store(
+      track: "internal",
+      aab: AAB_PATH,
+      release_status: "draft",
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+
+  desc "production AAB 빌드 후 Play 프로덕션 트랙에 draft 업로드(검토 후 수동 출시)"
+  lane :production do
+    build_production_aab
+    upload_to_play_store(
+      track: "production",
+      aab: AAB_PATH,
+      # draft: 자동 출시하지 않고 Play Console 에서 검토 후 직접 '출시'한다(안전장치).
+      release_status: "draft",
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

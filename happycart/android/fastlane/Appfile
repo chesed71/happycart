@@ -1,0 +1,10 @@
+# Play Developer API 인증 키 (service account JSON).
+# 비밀 파일이므로 repo 밖(~/.config/happycart/)에 두고 절대 커밋하지 않는다.
+# 환경변수 HAPPYCART_PLAY_JSON 으로 경로를 덮어쓸 수 있다(CI 등).
+json_key_file(
+  ENV["HAPPYCART_PLAY_JSON"] ||
+    File.expand_path("~/.config/happycart/play-service-account.json")
+)
+
+# Android applicationId (모든 flavor 공통).
+package_name("kr.happycart")

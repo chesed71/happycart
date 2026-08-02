@@ -22,7 +22,7 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.rimonhouse.happycart"
+    namespace = "kr.happycart"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -37,7 +37,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.rimonhouse.happycart"
+        applicationId = "kr.happycart"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -68,7 +68,7 @@ android {
 
     flavorDimensions += "environment"
 
-    // 모든 flavor 가 동일한 applicationId (com.rimonhouse.happycart) 를 사용한다.
+    // 모든 flavor 가 동일한 applicationId (kr.happycart) 를 사용한다.
     // Firebase 에 등록된 단일 패키지와 일치시키기 위함이며, 환경 분리는 .env.* 파일과
     // Supabase 프로젝트 분리로 이미 보장된다. 같은 디바이스에 dev/prod 동시 설치가
     // 필요해지면 Firebase 에 별도 Android 앱(.dev, .staging) 을 등록한 뒤
