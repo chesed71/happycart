@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "417373019518",
-    "project_id": "happycart-dev",
-    "storage_bucket": "happycart-dev.firebasestorage.app"
+    "project_number": "820824079626",
+    "project_id": "happycart-app-f48d3",
+    "storage_bucket": "happycart-app-f48d3.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:417373019518:android:6d5d968b68c9ed0969e72f",
+        "mobilesdk_app_id": "1:820824079626:android:a18724c61f6b1c87590ef3",
         "android_client_info": {
           "package_name": "kr.happycart"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBTVHbo9kghexrs8q43AGPerbqzgTZziNs"
+          "current_key": "AIzaSyAdcFXIHvtGJJzdZh6lrjQcKEoU66k3K3w"
         }
       ],
       "services": {
