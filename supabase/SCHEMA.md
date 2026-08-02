@@ -61,7 +61,7 @@ products 에서 바코드·중량·이미지 종속 컬럼을 뺀 나머지를 �
 |------|------|------|------|
 | `id` | uuid | PK | 변형들이 공유하는 영속 식별자 |
 | `brand`, `name`, `category` | text | brand/name NOT NULL | |
-| `ingredients_raw` | text | NOT NULL | 라벨 원문. RPC 비노출 |
+| `ingredients_raw` | text | NOT NULL | 라벨 원문. 0017부터 lookup_product 노출(전체 성분표) |
 | `ingredients_tokens` | text[] | NOT NULL default '{}' | 정규화 토큰 |
 | `bad_ingredients_detected` / `good_ingredients_detected` / `verdict_reason_codes` | text[] | NOT NULL default '{}' | 룰 매칭 결과 |
 | `verdict` | verdict_enum | NOT NULL | `okay` / `not_okay` |
@@ -138,13 +138,14 @@ products 에서 바코드·중량·이미지 종속 컬럼을 뺀 나머지를 �
 
 모두 `SECURITY DEFINER` + `set search_path = ''` — RLS default-deny 를 우회하는 유일한 공개 경로.
 
-### `lookup_product(p_barcode text)` (0002, 0010 image_url, 0015 분리 반영)
+### `lookup_product(p_barcode text)` (0002, 0010 image_url, 0015 분리 반영, 0017 ingredients_raw)
 
 - 0015 부터 `product_barcodes` ⨝ `product_masters` 조인으로 조회 (반환 형태는 기존과 동일)
 - master 의 `verified_status = 'verified'` 인 행만 반환 (0행이면 미등록)
 - 반환 컬럼: barcode, brand, name, size, category, verdict, bad/good_ingredients_detected,
-  verdict_reason_codes, rule_version, computed_at, source_checked_at, **image_url**
-- `ingredients_raw`, `image_source_url` 은 노출하지 않음
+  verdict_reason_codes, rule_version, computed_at, source_checked_at, **image_url**,
+  **ingredients_raw** (0017 — 앱 전체 성분표 표시용)
+- `image_source_url` 은 노출하지 않음
 
 ### `log_scan_event(p_event_type, p_barcode_format, p_verdict, p_scan_latency_ms, p_app_version, p_platform)` (0004)
 
@@ -201,3 +202,5 @@ PNG 원본은 업로드 전 JPEG 변환 필요. 단, 0015 분리 이후 적재 �
 | 0013 | pending_products.sql | pending_products 테이블 + log_pending_product RPC |
 | 0014 | remove_insufficient_verdict.sql | verdict_enum 에서 `insufficient` 제거, 토큰 필수 제약 추가, scan_events/log_scan_event 정리 |
 | 0015 | split_products.sql | products → product_masters + product_barcodes 분리, lookup_product/log_pending_product 재작성, 구 products 쓰기 동결 |
+| 0016 | upload_promoted_product.sql | upload_promoted_product RPC |
+| 0017 | lookup_product_ingredients_raw.sql | lookup_product 반환에 ingredients_raw 추가 (전체 성분표) |

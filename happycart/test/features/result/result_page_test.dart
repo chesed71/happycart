@@ -9,6 +9,7 @@ import 'package:happycart_rules/happycart_rules.dart';
 
 ProductLookupResult _product({
   String? imageUrl,
+  String ingredientsRaw = '',
   List<String> badIngredients = const ['blue_1', 'sugar'],
   List<String> reasonCodes = const ['artificial_color', 'refined_sugar'],
   Verdict verdict = Verdict.notOkay,
@@ -19,6 +20,7 @@ ProductLookupResult _product({
   size: '9g',
   category: '캔디류',
   imageUrl: imageUrl,
+  ingredientsRaw: ingredientsRaw,
   verdict: verdict,
   badIngredients: badIngredients,
   reasonCodes: reasonCodes,
@@ -53,9 +55,48 @@ void main() {
     (w) => w is Text && w.data == label && w.style?.fontSize == 15,
   );
 
-  testWidgets('success result renders product image when imageUrl is present', (
-    tester,
-  ) async {
+  testWidgets('괜찮아요(okay): imageUrl 있으면 제품 이미지가 노출된다', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResultPage(
+          state: ResultState.success(
+            _product(
+              imageUrl: 'https://thumbnail.coupangcdn.com/product.jpg',
+              badIngredients: const [],
+              reasonCodes: const [],
+              verdict: Verdict.okay,
+            ),
+          ),
+          onRescan: () {},
+        ),
+      ),
+    );
+
+    expect(productImage(), findsOneWidget);
+  });
+
+  testWidgets('괜찮아요(okay): imageUrl 없으면 슬롯에 fallback 아이콘이 뜬다', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResultPage(
+          state: ResultState.success(
+            _product(
+              badIngredients: const [],
+              reasonCodes: const [],
+              verdict: Verdict.okay,
+            ),
+          ),
+          onRescan: () {},
+        ),
+      ),
+    );
+
+    // 제품 이미지(network)는 없고, 슬롯에 fallback 아이콘이 뜬다.
+    expect(productImage(), findsNothing);
+    expect(find.byIcon(Icons.shopping_bag_outlined), findsOneWidget);
+  });
+
+  testWidgets('잠깐(not_okay): imageUrl 있어도 제품 이미지를 노출하지 않는다', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: ResultPage(
@@ -67,24 +108,9 @@ void main() {
       ),
     );
 
-    expect(productImage(), findsOneWidget);
-  });
-
-  testWidgets('success result falls back to placeholder icon without imageUrl', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ResultPage(
-          state: ResultState.success(_product()),
-          onRescan: () {},
-        ),
-      ),
-    );
-
-    // 제품 이미지(network)는 없고, 슬롯에 fallback 아이콘이 뜬다.
+    // 잠깐 단계는 상품 사진을 감추므로 network 이미지도, fallback 아이콘도 없다.
     expect(productImage(), findsNothing);
-    expect(find.byIcon(Icons.shopping_bag_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.shopping_bag_outlined), findsNothing);
   });
 
   // 카트 마크(Image.asset) 경로를 AssetImage 로 비교한다.
@@ -558,7 +584,7 @@ void main() {
       expect(find.text(bannerText), findsOneWidget);
 
       final bannerY = tester.getTopLeft(find.text(bannerText)).dy;
-      final headerY = tester.getTopLeft(find.text('신경 쓰이는 성분')).dy;
+      final headerY = tester.getTopLeft(find.text('주의 성분')).dy;
       expect(bannerY, lessThan(headerY));
     });
 
@@ -581,7 +607,7 @@ void main() {
       expect(find.text(bannerText), findsOneWidget);
 
       final bannerY = tester.getTopLeft(find.text(bannerText)).dy;
-      final headerY = tester.getTopLeft(find.text('신경 쓰이는 성분')).dy;
+      final headerY = tester.getTopLeft(find.text('주의 성분')).dy;
       expect(bannerY, lessThan(headerY));
     });
 
@@ -730,6 +756,65 @@ void main() {
     });
   });
 
+  group('전체 성분표 바텀시트', () {
+    testWidgets('버튼 탭 → 라벨 원문 성분이 뜨고 bad 는 강조된다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                ingredientsRaw: '정제수, 아스파탐, 밀가루',
+                badIngredients: const ['aspartame'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('전체 성분표 보기'));
+      await tester.pumpAndSettle();
+
+      // 헤더 + 시트 전용 원문 성분 조각(중립 성분은 시트에만 존재).
+      expect(find.text('전체 성분표'), findsOneWidget);
+      expect(find.text('정제수'), findsOneWidget);
+      expect(find.text('밀가루'), findsOneWidget);
+
+      // 배지 텍스트는 fontSize 14(FlagCard 헤더 15와 구분)로 시트 배지만 집는다.
+      Text badge(String name) => tester.widget<Text>(
+        find.byWidgetPredicate(
+          (w) => w is Text && w.data == name && w.style?.fontSize == 14,
+        ),
+      );
+      // 주의 성분(aspartame)만 색이 다르고, 나머지는 중립 색.
+      expect(badge('아스파탐').style?.color, AppTheme.stopDeep);
+      expect(badge('정제수').style?.color, AppTheme.ink);
+      expect(badge('밀가루').style?.color, AppTheme.ink);
+    });
+
+    testWidgets('성분 원문이 없으면 안내 문구를 보여준다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['sugar'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('전체 성분표 보기'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('성분 정보를 준비 중이에요'), findsOneWidget);
+    });
+  });
+
   group('좁은 화면(360dp) 섹션 헤더 오버플로', () {
     // 이 그룹만 좁은 폭(360x800)으로 뷰포트를 덮어쓴다 — 바깥 setUp(1080x2400)과
     // 간섭하지 않도록 그룹 전용 setUp/tearDown으로 격리한다.
@@ -744,7 +829,7 @@ void main() {
       view.resetDevicePixelRatio();
     });
 
-    testWidgets('높음(hydrogenated) 자동 펼침 카드의 "신경 쓰이는 성분" 헤더가 hint와 함께 가로 오버플로하지 않는다', (
+    testWidgets('높음(hydrogenated) 자동 펼침 카드의 "주의 성분" 헤더가 hint와 함께 가로 오버플로하지 않는다', (
       tester,
     ) async {
       await tester.pumpWidget(

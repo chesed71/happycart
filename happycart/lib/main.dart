@@ -18,21 +18,27 @@ Future<void> main() async {
     () async {
       WidgetsFlutterBinding.ensureInitialized();
       await Env.load();
-      await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform,
-      );
 
-      // Flutter framework 에서 발생한 동기 에러를 Crashlytics 로.
-      FlutterError.onError =
-          FirebaseCrashlytics.instance.recordFlutterFatalError;
-      // Flutter framework 바깥(플랫폼 / native 호출 등) 의 에러도 Crashlytics 로.
-      PlatformDispatcher.instance.onError = (error, stack) {
-        FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-        return true;
-      };
-      // debug 빌드에서는 Crashlytics 수집을 비활성 (테스터 단계만 데이터 의미 있음).
-      await FirebaseCrashlytics.instance
-          .setCrashlyticsCollectionEnabled(!kDebugMode);
+      // Firebase/Crashlytics 는 모바일 전용이다 — Crashlytics 는 web 을 지원하지
+      // 않고 firebase_options 도 web 이 미구성이므로, web 에서는 초기화를 건너뛴다.
+      // (이 앱의 Firebase 사용처는 Crashlytics 뿐. 백엔드는 Supabase.)
+      if (!kIsWeb) {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
+
+        // Flutter framework 에서 발생한 동기 에러를 Crashlytics 로.
+        FlutterError.onError =
+            FirebaseCrashlytics.instance.recordFlutterFatalError;
+        // Flutter framework 바깥(플랫폼 / native 호출 등) 의 에러도 Crashlytics 로.
+        PlatformDispatcher.instance.onError = (error, stack) {
+          FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+          return true;
+        };
+        // debug 빌드에서는 Crashlytics 수집을 비활성 (테스터 단계만 데이터 의미 있음).
+        await FirebaseCrashlytics.instance
+            .setCrashlyticsCollectionEnabled(!kDebugMode);
+      }
 
       await Supabase.initialize(
         url: Env.supabaseUrl,
@@ -42,8 +48,12 @@ Future<void> main() async {
       runApp(const ProviderScope(child: HappyCartApp()));
     },
     (error, stack) {
-      // zone 바깥에서 잡힌 에러도 Crashlytics 로.
-      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      // zone 바깥에서 잡힌 에러도 Crashlytics 로 (web 은 미지원이라 콘솔 로깅).
+      if (!kIsWeb) {
+        FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      } else {
+        debugPrint('Uncaught zone error: $error\n$stack');
+      }
     },
   );
 }

@@ -25,6 +25,13 @@ class ProductLookupResult {
   /// 제품 대표 이미지 URL — nullable.
   final String? imageUrl;
 
+  /// 라벨 원문 원재료 문자열 (전체 성분표 표시용).
+  ///
+  /// `lookup_product` RPC 가 `ingredients_raw` 를 내려주기 시작한 0017 이후로만
+  /// 채워진다 — 구 RPC 응답(컬럼 부재)에서는 빈 문자열이며, UI 는 이때 안내
+  /// 문구로 우아하게 대체한다.
+  final String ingredientsRaw;
+
   /// 룰 패키지가 결정한 최종 평가.
   final Verdict verdict;
 
@@ -57,6 +64,7 @@ class ProductLookupResult {
     required this.sourceCheckedAt,
     this.category,
     this.imageUrl,
+    this.ingredientsRaw = '',
     this.badIngredients = const [],
     this.goodIngredients = const [],
     this.reasonCodes = const [],
@@ -82,6 +90,8 @@ class ProductLookupResult {
       size: row['size'] as String,
       category: row['category'] as String?,
       imageUrl: row['image_url'] as String?,
+      // 구 RPC(0017 이전)는 이 컬럼을 내려주지 않으므로 null → '' 로 흡수한다.
+      ingredientsRaw: (row['ingredients_raw'] as String?) ?? '',
       verdict: verdictFromWire(row['verdict'] as String),
       badIngredients: asStringList(row['bad_ingredients_detected']),
       goodIngredients: asStringList(row['good_ingredients_detected']),
