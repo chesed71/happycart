@@ -26,10 +26,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return ios;
       case TargetPlatform.macOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for macos - '
@@ -53,10 +50,20 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBTVHbo9kghexrs8q43AGPerbqzgTZziNs',
-    appId: '1:417373019518:android:6d5d968b68c9ed0969e72f',
-    messagingSenderId: '417373019518',
-    projectId: 'happycart-dev',
-    storageBucket: 'happycart-dev.firebasestorage.app',
+    apiKey: 'AIzaSyAdcFXIHvtGJJzdZh6lrjQcKEoU66k3K3w',
+    appId: '1:820824079626:android:a18724c61f6b1c87590ef3',
+    messagingSenderId: '820824079626',
+    projectId: 'happycart-app-f48d3',
+    storageBucket: 'happycart-app-f48d3.firebasestorage.app',
   );
+
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyCiiinUUcdjGuiBrleMTbBy2VI7AC3nAQ4',
+    appId: '1:820824079626:ios:6b7b329269c2c910590ef3',
+    messagingSenderId: '820824079626',
+    projectId: 'happycart-app-f48d3',
+    storageBucket: 'happycart-app-f48d3.firebasestorage.app',
+    iosBundleId: 'kr.happycart',
+  );
+
 }
