@@ -1,1 +1,44 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"happycart-dev","appId":"1:417373019518:android:6d5d968b68c9ed0969e72f","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"happycart-dev","configurations":{"android":"1:417373019518:android:6d5d968b68c9ed0969e72f"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "happycart-dev",
+          "appId": "1:417373019518:android:6d5d968b68c9ed0969e72f",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "happycart-dev",
+          "configurations": {
+            "android": "1:417373019518:android:6d5d968b68c9ed0969e72f",
+            "ios": "1:417373019518:ios:ac9c2415fef3b78769e72f"
+          }
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "happycart-dev",
+          "appId": "1:417373019518:ios:ac9c2415fef3b78769e72f",
+          "uploadDebugSymbols": true,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      }
+    }
+  },
+  "hosting": [
+    {
+      "target": "prod",
+      "public": "build/web",
+      "ignore": ["firebase.json", "**/node_modules/**"],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    },
+    {
+      "target": "dev",
+      "public": "build/web",
+      "ignore": ["firebase.json", "**/node_modules/**"],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }]
+    }
+  ]
+}

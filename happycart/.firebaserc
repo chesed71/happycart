@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "happycart-dev"
+  },
+  "targets": {
+    "happycart-dev": {
+      "hosting": {
+        "prod": [
+          "happycart-prod"
+        ],
+        "dev": [
+          "happycart-dev"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
