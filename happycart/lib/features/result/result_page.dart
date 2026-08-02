@@ -6,6 +6,7 @@ import '../../app/theme.dart';
 import '../../core/disclaimer_card.dart';
 import '../../core/verdict.dart';
 import '../../data/models/product_lookup_result.dart';
+import 'ingredient_table.dart';
 import 'result_risk_tier.dart';
 import 'result_state.dart';
 
@@ -177,6 +178,8 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             imageUrl: widget.product.imageUrl,
             productName: widget.product.name,
             size: fullscreen ? 300 : 264,
+            // 상품 이미지는 `괜찮아요`에서만 노출한다(잠깐 단계는 마크만).
+            showProduct: tier == RiskTier.ok,
           ),
         ),
         const SizedBox(height: 8),
@@ -273,10 +276,10 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             const SizedBox(height: 16),
           ],
 
-          // 신경 쓰이는 성분
+          // 주의 성분
           if (hasBad) ...[
             _SectionHeader(
-              title: '신경 쓰이는 성분',
+              title: '주의 성분',
               count: _riskDisplays.length,
               hint: '탭하면 이유를 볼 수 있어요',
               countColor: data.accent,
@@ -306,6 +309,16 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     );
   }
 
+  /// "전체 성분표 보기" → 라벨 원문 성분을 바텀시트로 노출한다.
+  void _openIngredientTable(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _IngredientTableSheet(product: widget.product),
+    );
+  }
+
   Widget _buildFooter(BuildContext context) {
     final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
     return Container(
@@ -319,7 +332,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextButton(
-            onPressed: () {},
+            onPressed: () => _openIngredientTable(context),
             style: TextButton.styleFrom(
               foregroundColor: AppTheme.inkSoft,
               minimumSize: const Size.fromHeight(44),
@@ -391,11 +404,17 @@ class _VerdictHeroArt extends StatelessWidget {
   final String? imageUrl;
   final String productName;
   final double size;
+
+  /// 중앙 슬롯에 상품 이미지를 노출할지 여부.
+  /// `okay`(괜찮아요)에서만 `true`, `잠깐`(위험) 단계에서는 상품 사진을 감추고
+  /// 카트·손 마크만 보여준다.
+  final bool showProduct;
   const _VerdictHeroArt({
     required this.data,
     required this.imageUrl,
     required this.productName,
     required this.size,
+    required this.showProduct,
   });
 
   @override
@@ -445,22 +464,37 @@ class _VerdictHeroArt extends StatelessWidget {
           width: size,
           height: size,
           child: Stack(
-            children: [
-              // 카트 (뒤, 우측 하단 — 제품에 가리지 않게)
-              Positioned(
-                bottom: size * 0.05,
-                right: size * 0.12,
-                child: Image.asset(data.cartAsset, width: size * 0.60),
-              ),
-              // 제품 이미지 (원 중앙)
-              Align(alignment: Alignment.center, child: productImg),
-              // 손 마크 (앞, 좌상단 — 원 안으로 들어오게 우측 아래로)
-              Positioned(
-                top: size * 0.13,
-                left: size * 0.13,
-                child: Image.asset(data.handAsset, width: size * 0.40),
-              ),
-            ],
+            children: showProduct
+                ? [
+                    // 괜찮아요: 카트(뒤·우하단) · 제품(중앙) · 손(앞·좌상단) 3겹.
+                    Positioned(
+                      bottom: size * 0.05,
+                      right: size * 0.12,
+                      child: Image.asset(data.cartAsset, width: size * 0.60),
+                    ),
+                    Align(alignment: Alignment.center, child: productImg),
+                    Positioned(
+                      top: size * 0.13,
+                      left: size * 0.13,
+                      child: Image.asset(data.handAsset, width: size * 0.40),
+                    ),
+                  ]
+                : [
+                    // 잠깐(위험): 상품 슬롯 없이 카트(하단·넓게) 위 중앙에 손(금지)
+                    // 마크를 크게 얹는다. 참조 디자인 art-*-noproduct.png 구성.
+                    Positioned(
+                      left: size * 0.12,
+                      top: size * 0.33,
+                      width: size * 0.80,
+                      child: Image.asset(data.cartAsset),
+                    ),
+                    Positioned(
+                      left: size * 0.22,
+                      top: size * 0.16,
+                      width: size * 0.56,
+                      child: Image.asset(data.handAsset),
+                    ),
+                  ],
           ),
         ),
       ),
@@ -624,6 +658,191 @@ class _ProductNamePill extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 13.5, height: 1.2),
         ),
+      ),
+    );
+  }
+}
+
+/// 전체 성분표 바텀시트 — 라벨 원문 성분을 조각별로 나열하고, 서버가 판정한
+/// 주의 성분(빨강)·깨끗한(초록) 성분을 강조한다.
+class _IngredientTableSheet extends StatelessWidget {
+  final ProductLookupResult product;
+  const _IngredientTableSheet({required this.product});
+
+  @override
+  Widget build(BuildContext context) {
+    final raw = product.ingredientsRaw.trim();
+    final entries = raw.isEmpty
+        ? const <IngredientTableEntry>[]
+        : buildIngredientTable(
+            raw,
+            badKeys: product.badIngredients,
+            goodKeys: product.goodIngredients,
+          );
+    final badCount = entries
+        .where((e) => e.mark == IngredientMark.bad)
+        .length;
+    final maxHeight = MediaQuery.sizeOf(context).height * 0.82;
+    final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
+
+    return Container(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      decoration: const BoxDecoration(
+        color: AppTheme.bg,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 그립 핸들
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 10, bottom: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.line,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // 헤더
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '전체 성분표',
+                  style: TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.ink,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${product.name} · ${product.brand}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.inkSoft,
+                  ),
+                ),
+                if (entries.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    badCount > 0
+                        ? '총 ${entries.length}개 · 주의 성분 $badCount개'
+                        : '총 ${entries.length}개',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.inkMute,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: AppTheme.line),
+          // 본문 — 성분을 배지로 나열(주의 성분만 색 강조).
+          Flexible(
+            child: entries.isEmpty
+                ? _EmptyIngredients(bottomPad: bottomPad)
+                : SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(18, 14, 18, 16 + bottomPad),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final entry in entries)
+                          _IngredientBadge(entry: entry),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 성분 배지 하나 — 주의 성분(bad)만 색을 다르게 주고, 나머지(중립·good)는
+/// 동일한 중립 배지로 표시한다.
+class _IngredientBadge extends StatelessWidget {
+  final IngredientTableEntry entry;
+  const _IngredientBadge({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final isBad = entry.mark == IngredientMark.bad;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+      decoration: BoxDecoration(
+        color: isBad ? AppTheme.stopSoft : AppTheme.surface,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: isBad
+              ? AppTheme.stopMain.withValues(alpha: 0.35)
+              : AppTheme.line,
+        ),
+      ),
+      child: Text(
+        entry.text,
+        style: TextStyle(
+          fontSize: 14,
+          height: 1.2,
+          fontWeight: isBad ? FontWeight.w700 : FontWeight.w500,
+          color: isBad ? AppTheme.stopDeep : AppTheme.ink,
+        ),
+      ),
+    );
+  }
+}
+
+/// 성분 원문이 아직 없을 때(구 RPC 등)의 안내.
+class _EmptyIngredients extends StatelessWidget {
+  final double bottomPad;
+  const _EmptyIngredients({required this.bottomPad});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(24, 36, 24, 36 + bottomPad),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.receipt_long_outlined,
+            size: 44,
+            color: AppTheme.inkMute,
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            '성분 정보를 준비 중이에요',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.ink,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '이 제품의 전체 성분표는 곧 제공될 예정이에요.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              color: AppTheme.inkSoft,
+              height: 1.5,
+            ),
+          ),
+        ],
       ),
     );
   }
