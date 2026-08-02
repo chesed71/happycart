@@ -61,6 +61,10 @@ app.*.map.json
 # fastlane 실행 생성물.
 android/fastlane/report.xml
 android/fastlane/Preview.html
+android/fastlane/README.md
 android/fastlane/screenshots
 android/fastlane/test_output
+
+# Firebase Hosting 배포 캐시.
+.firebase/
 
