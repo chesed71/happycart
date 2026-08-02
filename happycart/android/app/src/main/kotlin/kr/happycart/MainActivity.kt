@@ -1,4 +1,4 @@
-package com.rimonhouse.happycart
+package kr.happycart
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -78,8 +78,8 @@ HappyCart/
 │   │       └── result/
 │   │           ├── result_state.dart      ← 5상태 sealed class
 │   │           └── result_page.dart       ← okay/not_okay/not_found/insufficient/network_error
-│   ├── android/                       ← Android (com.rimonhouse.happycart)
-│   ├── ios/                           ← iOS (com.rimonhouse.happycart)
+│   ├── android/                       ← Android (kr.happycart)
+│   ├── ios/                           ← iOS (kr.happycart)
 │   ├── assets/icon/icon.png           ← happy-cart.png 복사본 (launcher icon 입력)
 │   ├── tool/
 │   │   ├── compute_verdicts.dart      ← 시드 빌더 (fixture → SQL)
@@ -218,7 +218,7 @@ clean fat (EVOO, 아보카도, 코코넛, grass-fed 버터), natural sweetener (
 | 항목 | 값 |
 |---|---|
 | Project ID | `happycart-dev` |
-| Android Package | `com.rimonhouse.happycart` |
+| Android Package | `kr.happycart` |
 | Mobile App ID | `1:417373019518:android:6d5d968b68c9ed0969e72f` |
 | Google Account | `hagjun580400@gmail.com` |
 | App Distribution | 1.0.0-dev 두 차례 배포됨 (EatSafe 아이콘 → HappyCart 마스코트) |
@@ -241,7 +241,7 @@ clean fat (EVOO, 아보카도, 코코넛, grass-fed 버터), natural sweetener (
 ```
 
 ### Flavor
-모든 flavor 동일 `applicationId = com.rimonhouse.happycart` (Firebase 단일 등록 매칭). 환경 분리는 `.env.{development,staging,production}` 파일 선택으로만 처리.
+모든 flavor 동일 `applicationId = kr.happycart` (Firebase 단일 등록 매칭). 환경 분리는 `.env.{development,staging,production}` 파일 선택으로만 처리.
 
 ### `versionNameSuffix`
 - development → `-dev`
