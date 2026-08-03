@@ -3,24 +3,24 @@
     "platforms": {
       "android": {
         "default": {
-          "projectId": "happycart-dev",
-          "appId": "1:417373019518:android:6d5d968b68c9ed0969e72f",
+          "projectId": "happycart-app-f48d3",
+          "appId": "1:820824079626:android:a18724c61f6b1c87590ef3",
           "fileOutput": "android/app/google-services.json"
         }
       },
       "dart": {
         "lib/firebase_options.dart": {
-          "projectId": "happycart-dev",
+          "projectId": "happycart-app-f48d3",
           "configurations": {
-            "android": "1:417373019518:android:6d5d968b68c9ed0969e72f",
-            "ios": "1:417373019518:ios:ac9c2415fef3b78769e72f"
+            "android": "1:820824079626:android:a18724c61f6b1c87590ef3",
+            "ios": "1:820824079626:ios:6b7b329269c2c910590ef3"
           }
         }
       },
       "ios": {
         "default": {
-          "projectId": "happycart-dev",
-          "appId": "1:417373019518:ios:ac9c2415fef3b78769e72f",
+          "projectId": "happycart-app-f48d3",
+          "appId": "1:820824079626:ios:6b7b329269c2c910590ef3",
           "uploadDebugSymbols": true,
           "fileOutput": "ios/Runner/GoogleService-Info.plist"
         }
