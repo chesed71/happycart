@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="index" />
+  <title>해피카트 개인정보처리방침</title>
+  <style>
+    :root {
+      --bg: #faf7f2;
+      --surface: #ffffff;
+      --ink: #1f1b16;
+      --muted: #6b6258;
+      --line: #e7e0d6;
+      --accent: #ff7a1a;
+      --accent-soft: #fff1e6;
+      --maxw: 44rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #16130f;
+        --surface: #201b16;
+        --ink: #f2ede6;
+        --muted: #a89e92;
+        --line: #332c24;
+        --accent: #ff9145;
+        --accent-soft: #2a1d11;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: #faf7f2; --surface: #ffffff; --ink: #1f1b16; --muted: #6b6258;
+      --line: #e7e0d6; --accent: #ff7a1a; --accent-soft: #fff1e6;
+    }
+    :root[data-theme="dark"] {
+      --bg: #16130f; --surface: #201b16; --ink: #f2ede6; --muted: #a89e92;
+      --line: #332c24; --accent: #ff9145; --accent-soft: #2a1d11;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+        "Malgun Gothic", "Noto Sans KR", Roboto, sans-serif;
+      line-height: 1.7;
+      font-size: 16px;
+      letter-spacing: -0.01em;
+    }
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+    header {
+      display: flex; align-items: center; gap: 0.7rem;
+      padding-bottom: 1.25rem; margin-bottom: 1.75rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .logo {
+      width: 2.4rem; height: 2.4rem; flex: none;
+      background: var(--accent-soft); color: var(--accent);
+      border-radius: 0.7rem; display: grid; place-items: center;
+      font-size: 1.35rem;
+    }
+    .brand { font-weight: 700; font-size: 1.05rem; }
+    .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 0.8rem; }
+    h1 { font-size: 1.7rem; line-height: 1.3; margin: 0 0 0.4rem; text-wrap: balance; }
+    .eff { color: var(--muted); font-size: 0.9rem; margin: 0 0 2rem; }
+    h2 {
+      font-size: 1.12rem; margin: 2.2rem 0 0.6rem; padding-top: 0.4rem;
+      display: flex; align-items: baseline; gap: 0.5rem;
+    }
+    h2 .n {
+      color: var(--accent); font-variant-numeric: tabular-nums;
+      font-size: 0.9rem; font-weight: 700;
+    }
+    p { margin: 0.5rem 0; }
+    ul { margin: 0.5rem 0; padding-left: 1.2rem; }
+    li { margin: 0.35rem 0; }
+    .lead {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 0.9rem; padding: 1.1rem 1.2rem; margin: 0 0 1rem;
+      color: var(--muted);
+    }
+    .callout {
+      background: var(--accent-soft); border-radius: 0.7rem;
+      padding: 0.85rem 1rem; margin: 0.8rem 0; font-size: 0.95rem;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.94rem; }
+    th, td { text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .tag {
+      display: inline-block; font-size: 0.75rem; font-weight: 600;
+      color: var(--accent); background: var(--accent-soft);
+      padding: 0.1rem 0.5rem; border-radius: 1rem;
+    }
+    a { color: var(--accent); }
+    .fill { color: var(--accent); font-weight: 700; }
+    footer {
+      margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
+      color: var(--muted); font-size: 0.85rem;
+    }
+    .overflow { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo" aria-hidden="true">🛒</div>
+      <div class="brand">해피카트 <small>HappyCart</small></div>
+    </header>
+
+    <h1>개인정보처리방침</h1>
+    <p class="eff">시행일: 2026년 8월 3일</p>
+
+    <p class="lead">
+      해피카트(이하 “본 앱”)는 이용자의 개인정보를 소중하게 생각합니다. 본 앱은
+      회원가입·로그인이 없으며, 이름·이메일·전화번호 등 개인을 직접 식별하는 정보를
+      일절 수집하지 않습니다. 본 방침은 본 앱이 어떤 정보를 어떻게 다루는지 투명하게
+      안내합니다.
+    </p>
+
+    <h2><span class="n">01</span> 수집하지 않는 정보</h2>
+    <p>
+      본 앱은 계정 시스템이 없어 이름, 이메일, 전화번호, 주소, 생년월일, 위치 정보,
+      연락처 등 개인을 식별할 수 있는 정보를 수집하지 않습니다. 이용자별 스캔 이력도
+      저장하지 않습니다.
+    </p>
+
+    <h2><span class="n">02</span> 카메라 이용</h2>
+    <p>
+      본 앱은 제품 바코드를 인식하기 위해 카메라 권한을 사용합니다. 카메라 영상은
+      기기 내부에서만 실시간으로 처리되어 바코드 번호를 추출하며,
+      <strong>사진이나 영상을 저장하거나 외부로 전송하지 않습니다.</strong>
+    </p>
+
+    <h2><span class="n">03</span> 처리하는 정보</h2>
+    <div class="overflow">
+      <table>
+        <thead>
+          <tr><th>구분</th><th>내용</th><th>목적</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag">제품 조회</span></td>
+            <td>스캔한 바코드 번호</td>
+            <td>제품 정보 서버로 전송해 성분·판정 결과를 조회. 바코드 번호는 제품
+              식별용이며 개인을 식별하지 않습니다.</td>
+          </tr>
+          <tr>
+            <td><span class="tag">익명 통계</span></td>
+            <td>스캔 이벤트 종류, 바코드 형식, 판정 결과, 처리 시간, 앱 버전, 운영체제
+              구분(iOS/Android)</td>
+            <td>서비스 품질 개선을 위한 익명 집계. 기기 식별자나 개인정보는 포함되지
+              않습니다.</td>
+          </tr>
+          <tr>
+            <td><span class="tag">오류 진단</span></td>
+            <td>앱 비정상 종료(crash) 시 기기 모델·운영체제 버전·앱 상태·오류 로그 및
+              진단 도구가 생성한 익명 설치 식별자</td>
+            <td>앱 안정성 개선. Google Firebase Crashlytics를 통해 수집됩니다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      본 앱은 광고 식별자(AAID/IDFA)를 수집하지 않으며, 광고·마케팅 추적 목적의
+      제3자 도구를 사용하지 않습니다.
+    </div>
+
+    <h2><span class="n">04</span> 제3자 서비스</h2>
+    <p>본 앱은 아래 서비스를 통해 데이터를 처리하며, 각 서비스는 자체 개인정보처리방침을
+      따릅니다.</p>
+    <ul>
+      <li><strong>Supabase</strong> — 제품 정보 조회 및 익명 이용 통계 저장(백엔드/데이터베이스)</li>
+      <li><strong>Google Firebase Crashlytics</strong> — 앱 오류 진단</li>
+    </ul>
+
+    <h2><span class="n">05</span> 보관 및 파기</h2>
+    <p>
+      익명 이용 통계와 오류 진단 정보는 서비스 개선 목적에 필요한 기간 동안 보관한 뒤
+      파기합니다. 이 정보들은 개인을 식별하는 형태로 저장되지 않습니다.
+    </p>
+
+    <h2><span class="n">06</span> 이용자의 선택권</h2>
+    <ul>
+      <li>카메라 권한은 기기의 설정에서 언제든지 철회할 수 있습니다. 철회하면 바코드
+        스캔 기능이 제한됩니다.</li>
+      <li>익명 통계·오류 진단 정보는 개인을 식별하지 않으므로 개별 삭제 요청 대상이
+        아니지만, 관련 문의는 아래 연락처로 주시면 성실히 답변드립니다.</li>
+    </ul>
+
+    <h2><span class="n">07</span> 아동의 개인정보</h2>
+    <p>
+      본 앱은 만 14세 미만 아동을 주 이용 대상으로 하지 않으며, 아동을 포함한 어떤
+      이용자로부터도 개인 식별 정보를 수집하지 않습니다.
+    </p>
+
+    <h2><span class="n">08</span> 방침의 변경</h2>
+    <p>
+      본 방침은 법령이나 서비스 변경에 따라 개정될 수 있으며, 개정 시 본 페이지를 통해
+      변경 내용과 시행일을 공지합니다.
+    </p>
+
+    <h2><span class="n">09</span> 문의처</h2>
+    <p>
+      개인정보 처리에 관한 문의는 아래로 연락해 주세요.<br />
+      운영자: <span class="fill">해피카트 (rimonhouse)</span><br />
+      이메일: <span class="fill">ronen.hong@gmail.com</span>
+    </p>
+
+    <footer>
+      해피카트(HappyCart) · 본 문서는 Google Play 및 앱 스토어 정책에 따른
+      개인정보처리방침입니다.
+    </footer>
+  </div>
+</body>
+</html>
