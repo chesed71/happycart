@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,13 +53,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     // 스펙 §7 — 백그라운드 진입 시 카메라 stop, 복귀 시 재개.
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
-      _scannerController.stop();
+      unawaited(_safeStopScanner());
       ref.read(scanControllerProvider.notifier).pause();
     } else if (state == AppLifecycleState.resumed) {
       ref.read(scanControllerProvider.notifier).resume();
       final status = ref.read(scanControllerProvider).status;
       if (status == ScanStatus.scanning) {
-        _scannerController.start();
+        unawaited(_safeStartScanner());
       }
     }
   }
@@ -67,6 +69,40 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     WidgetsBinding.instance.removeObserver(this);
     _scannerController.dispose();
     super.dispose();
+  }
+
+  /// 스캐너 컨트롤러 호출에서 나는 생명주기 예외(이미 시작 중 / dispose 이후 /
+  /// 위젯 미부착 등)와 네이티브 카메라 예외는 앱을 죽이면 안 된다. 삼켜서
+  /// 비치명적(non-fatal)으로만 기록한다. (web 은 Crashlytics 미지원 — main.dart 참고)
+  void _recordScannerError(Object error, StackTrace stack) {
+    if (!kIsWeb) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: false);
+    }
+  }
+
+  /// 카메라 start. 이미 실행 중이거나 시작 중이면 중복 호출 시 예외가 나므로
+  /// 건너뛴다(생명주기 복귀·권한 승인이 겹치는 경쟁 상황 방지).
+  Future<void> _safeStartScanner() async {
+    final value = _scannerController.value;
+    if (value.isRunning || value.isStarting) return;
+    try {
+      await _scannerController.start();
+    } on MobileScannerException catch (error, stack) {
+      _recordScannerError(error, stack);
+    } on PlatformException catch (error, stack) {
+      _recordScannerError(error, stack);
+    }
+  }
+
+  /// 카메라 stop. dispose 이후 등 예외가 나도 앱을 죽이지 않는다.
+  Future<void> _safeStopScanner() async {
+    try {
+      await _scannerController.stop();
+    } on MobileScannerException catch (error, stack) {
+      _recordScannerError(error, stack);
+    } on PlatformException catch (error, stack) {
+      _recordScannerError(error, stack);
+    }
   }
 
   Future<void> _onDetect(BarcodeCapture capture) async {
@@ -81,15 +117,23 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     HapticFeedback.mediumImpact();
     // 카메라는 비동기로 멈춰도 되지만, context 사용 전에는 await 하지 않는다
     // — analyzer 의 use_build_context_synchronously 룰을 충족시키기 위함.
-    unawaited(_scannerController.stop());
+    unawaited(_safeStopScanner());
     await pushResult(context, result);
     if (!mounted) return;
     notifier.resumeScanning();
-    await _scannerController.start();
+    await _safeStartScanner();
   }
 
   Future<void> _toggleTorch() async {
-    await _scannerController.toggleTorch();
+    try {
+      await _scannerController.toggleTorch();
+    } on MobileScannerException catch (error, stack) {
+      _recordScannerError(error, stack);
+      return;
+    } on PlatformException catch (error, stack) {
+      _recordScannerError(error, stack);
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _torchOn = !_torchOn;
@@ -129,7 +173,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
           (prev?.status == ScanStatus.idle ||
               prev?.status == ScanStatus.permissionDenied ||
               prev == null)) {
-        _scannerController.start();
+        unawaited(_safeStartScanner());
       }
     });
 
