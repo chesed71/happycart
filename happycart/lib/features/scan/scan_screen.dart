@@ -73,10 +73,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     _appResumed = state == AppLifecycleState.resumed;
     final notifier = ref.read(scanControllerProvider.notifier);
     if (_appResumed) {
-      notifier.resume(); // 권한 유지 시 즉시 복원(빠른 경로)
-      // 설정 앱에서 권한이 바뀌었을 수 있으니 재조회해 상태를 동기화한다.
-      // 권한 조회는 플랫폼 채널 호출이라 실패할 수 있어 non-fatal 로 기록한다.
-      // status 가 바뀌면 ref.listen 이 _syncCamera 를 다시 호출한다.
+      // 캐시된 권한값으로 낙관적 복원을 하지 않고, 실제 권한을 재조회해 상태를
+      // 결정한다(설정에서 철회됐는데 조회까지 실패하면 권한 없이 카메라가 켜지는
+      // stale scanning 을 방지). status 가 바뀌면 ref.listen 이 _syncCamera 를
+      // 다시 호출한다. 조회는 플랫폼 채널 호출이라 실패할 수 있어 non-fatal 기록.
       unawaited(notifier.refreshPermission().catchError(_recordScannerError));
     } else {
       notifier.pause();

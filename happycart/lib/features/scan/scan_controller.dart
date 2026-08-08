@@ -86,6 +86,9 @@ class ScanController extends Notifier<ScanState> {
   // 권한 작업(요청/재조회) 세대 토큰. 여러 작업이 겹칠 때 가장 최근에 시작한
   // 작업의 결과만 반영해, 늦게 끝난 오래된 조회가 최신 상태를 덮어쓰지 않게 한다.
   int _permissionGeneration = 0;
+  // 명시적 권한 "요청"(다이얼로그)이 진행 중인지. 요청 결과가 권위이므로 그
+  // 사이의 재조회(refresh)가 요청을 무효화하지 않도록 하는 데 쓴다.
+  bool _requestInProgress = false;
 
   @override
   ScanState build() => const ScanState(status: ScanStatus.idle);
@@ -106,12 +109,17 @@ class ScanController extends Notifier<ScanState> {
 
   /// 카메라 권한을 요청하고 결과에 따라 상태를 전이한다.
   Future<void> requestPermission() async {
+    _requestInProgress = true;
+    // 진행 중이던 재조회(refresh)가 있으면 그 결과를 무효화한다(요청 우선).
     final generation = ++_permissionGeneration;
-    final requester = ref.read(cameraPermissionRequesterProvider);
-    final result = await requester();
-    // 이 작업 이후 더 최신 권한 작업이 시작됐다면 오래된 결과는 폐기한다.
-    if (generation != _permissionGeneration) return;
-    _applyPermissionResult(result.isGranted);
+    try {
+      final requester = ref.read(cameraPermissionRequesterProvider);
+      final result = await requester();
+      if (generation != _permissionGeneration) return;
+      _applyPermissionResult(result.isGranted);
+    } finally {
+      _requestInProgress = false;
+    }
   }
 
   /// 바코드 detection 콜백에서 호출.
@@ -178,17 +186,10 @@ class ScanController extends Notifier<ScanState> {
     }
   }
 
-  /// 라이프사이클: 포그라운드 복귀 시 호출.
-  void resume() {
-    // 최초 idle(권한 대기)은 승인 전까지 scanning 으로 올리지 않는다. 권한
-    // 다이얼로그로 resumed 가 권한 결과보다 먼저 와도 조기 시작하지 않도록.
-    if (_permissionGranted && state.status == ScanStatus.idle) {
-      state = state.copyWith(status: ScanStatus.scanning);
-    }
-  }
-
   /// foreground 복귀 시 실제 카메라 권한을 다이얼로그 없이 재조회해 상태를
-  /// 동기화한다. 설정 앱에서 권한이 바뀐 경우를 반영한다:
+  /// 동기화한다. 이 메서드가 복귀 시 스캔 재개도 겸한다(캐시된 권한값으로
+  /// 낙관적 복원을 하지 않으므로, 조회가 실패하면 기존 상태를 유지해 권한 없이
+  /// 카메라가 켜지지 않는다). 설정 앱에서 권한이 바뀐 경우를 반영한다:
   /// - 거부→승인: permissionDenied/idle → scanning 으로 복구
   /// - 승인→철회: scanning 등 → permissionDenied
   ///
@@ -196,6 +197,9 @@ class ScanController extends Notifier<ScanState> {
   /// 예외를 던질 수 있다. 예외는 여기서 삼키지 않고 호출측이 non-fatal 로
   /// 기록하도록 전파한다(상태는 그대로 유지됨).
   Future<void> refreshPermission() async {
+    // 명시적 권한 요청(다이얼로그)이 진행 중이면 재조회를 건너뛴다 — 요청
+    // 결과가 권위이므로 재조회가 이를 무효화하지 않도록.
+    if (_requestInProgress) return;
     final generation = ++_permissionGeneration;
     final checker = ref.read(cameraPermissionCheckerProvider);
     final status = await checker();

@@ -22,36 +22,16 @@ ProviderContainer _containerWith(
 }
 
 void main() {
-  // 크래시 방지 핵심 계약: 권한 결과가 오기 전에 lifecycle resumed 가 먼저
-  // 전달돼도 스캐너를 조기 시작하지 않는다(최초 idle = 권한 대기).
-  test('resume() before permission granted keeps idle', () {
-    final container = _containerWith(PermissionStatus.granted);
-    addTearDown(container.dispose);
-    final notifier = container.read(scanControllerProvider.notifier);
-
-    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
-    notifier.resume(); // 권한 Future 완료 전 resumed 가 온 상황
-    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
-  });
-
-  // 권한 승인 후에는 pause→resume 사이클이 scanning 을 정상 복원해야 한다.
-  test('granted 후 pause→resume 은 scanning 을 복원한다', () async {
+  test('requestPermission 승인 → scanning', () async {
     final container = _containerWith(PermissionStatus.granted);
     addTearDown(container.dispose);
     final notifier = container.read(scanControllerProvider.notifier);
 
     await notifier.requestPermission();
     expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
-
-    notifier.pause();
-    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
-
-    notifier.resume();
-    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
   });
 
-  // 권한 거부 시 permissionDenied 로 남고 resume 은 상태를 바꾸지 않는다.
-  test('denied 후 resume 은 permissionDenied 를 유지한다', () async {
+  test('requestPermission 거부 → permissionDenied', () async {
     final container = _containerWith(PermissionStatus.denied);
     addTearDown(container.dispose);
     final notifier = container.read(scanControllerProvider.notifier);
@@ -61,12 +41,21 @@ void main() {
       container.read(scanControllerProvider).status,
       ScanStatus.permissionDenied,
     );
+  });
 
-    notifier.resume();
-    expect(
-      container.read(scanControllerProvider).status,
-      ScanStatus.permissionDenied,
-    );
+  // 복귀 시 refreshPermission 이 스캔 재개를 겸한다: 승인 상태에서 pause 후
+  // 재조회하면 scanning 으로 복원된다.
+  test('granted 후 pause→refreshPermission 은 scanning 을 복원한다', () async {
+    final container = _containerWith(PermissionStatus.granted);
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    await notifier.requestPermission();
+    notifier.pause();
+    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
+
+    await notifier.refreshPermission();
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
   });
 
   // 설정에서 권한을 승인하고 복귀하면 permissionDenied → scanning 으로 복구된다.
@@ -129,6 +118,30 @@ void main() {
       container.read(scanControllerProvider).status,
       ScanStatus.permissionDenied,
     );
+  });
+
+  // 명시적 권한 요청(다이얼로그)이 진행 중이면 재조회가 이를 무효화하지 않는다:
+  // 요청 중 refresh 는 skip 되고, 사용자의 승인 결과가 반영된다.
+  test('요청 진행 중 refresh 는 요청 결과를 무효화하지 않는다', () async {
+    final requestCompleter = Completer<PermissionStatus>();
+    final container = ProviderContainer(
+      overrides: [
+        cameraPermissionRequesterProvider
+            .overrideWith((ref) => () => requestCompleter.future),
+        cameraPermissionCheckerProvider
+            .overrideWith((ref) => () async => PermissionStatus.denied),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    final requestFuture = notifier.requestPermission(); // 다이얼로그 대기 중
+    await notifier.refreshPermission(); // 요청 중 → skip(denied 반영 안 됨)
+    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
+
+    requestCompleter.complete(PermissionStatus.granted); // 사용자 승인
+    await requestFuture;
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
   });
 
   // 권한 조회가 역순으로 완료돼도(오래된 조회가 나중에 끝남) 최신 결과만 반영한다.
