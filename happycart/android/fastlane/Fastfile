@@ -31,6 +31,20 @@ platform :android do
     )
   end
 
+  desc "production AAB 빌드 후 Play 비공개 테스트(alpha) 트랙에 draft 업로드"
+  lane :closed do
+    build_production_aab
+    upload_to_play_store(
+      track: "alpha",
+      aab: AAB_PATH,
+      release_status: "draft",
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+
   desc "production AAB 빌드 후 Play 프로덕션 트랙에 draft 업로드(검토 후 수동 출시)"
   lane :production do
     build_production_aab
