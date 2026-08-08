@@ -29,45 +29,82 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   late final MobileScannerController _scannerController;
   bool _torchOn = false;
   bool _permissionRequested = false;
+  // 앱 lifecycle 이 활성(resumed)인지. 카메라 목표 상태 계산에 쓴다.
+  bool _appResumed = true;
+  // 카메라가 켜져 있어야 하는지에 대한 목표 상태. 마지막 이벤트 값이 아니라
+  // (_appResumed && status==scanning) 결합 조건으로 _syncCamera 가 도출한다.
+  bool _cameraShouldRun = false;
+  // start/stop/dispose 를 직렬화하기 위한 작업 체인. lifecycle·권한 승인·결과
+  // 화면 복귀가 겹쳐도 컨트롤러 작업이 순차적으로 실행되도록 보장한다.
+  Future<void> _cameraOp = Future<void>.value();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // lifecycle 초기값을 실제 상태에서 가져온다(화면이 비활성 중 생성되는 경우
+    // 대비). 아직 값이 없으면(null, 콜드 스타트) 활성으로 간주한다.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appResumed = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     _scannerController = MobileScannerController(
       formats: const [BarcodeFormat.ean13, BarcodeFormat.ean8],
       detectionSpeed: DetectionSpeed.normal,
       detectionTimeoutMs: 250,
       autoStart: false,
     );
-    // 위젯이 실제로 빌드된 다음 권한 요청을 시작한다.
+    // 위젯이 실제로 빌드된 다음 권한 요청을 시작한다. 권한 요청은 플랫폼 채널
+    // 호출이라 실패할 수 있어 non-fatal 로 기록한다.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _permissionRequested) return;
       _permissionRequested = true;
-      ref.read(scanControllerProvider.notifier).requestPermission();
+      unawaited(
+        ref
+            .read(scanControllerProvider.notifier)
+            .requestPermission()
+            .catchError(_recordScannerError),
+      );
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // 스펙 §7 — 백그라운드 진입 시 카메라 stop, 복귀 시 재개.
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      unawaited(_safeStopScanner());
-      ref.read(scanControllerProvider.notifier).pause();
-    } else if (state == AppLifecycleState.resumed) {
-      ref.read(scanControllerProvider.notifier).resume();
-      final status = ref.read(scanControllerProvider).status;
-      if (status == ScanStatus.scanning) {
-        unawaited(_safeStartScanner());
-      }
+    // resumed 만 활성으로 보고 나머지(inactive/paused/hidden/detached)는 비활성.
+    _appResumed = state == AppLifecycleState.resumed;
+    final notifier = ref.read(scanControllerProvider.notifier);
+    if (_appResumed) {
+      // 캐시된 권한값으로 낙관적 복원을 하지 않고, 실제 권한을 재조회해 상태를
+      // 결정한다(설정에서 철회됐는데 조회까지 실패하면 권한 없이 카메라가 켜지는
+      // stale scanning 을 방지). status 가 바뀌면 ref.listen 이 _syncCamera 를
+      // 다시 호출한다. 조회는 플랫폼 채널 호출이라 실패할 수 있어 non-fatal 기록.
+      unawaited(notifier.refreshPermission().catchError(_recordScannerError));
+    } else {
+      notifier.pause();
     }
+    _syncCamera();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _scannerController.dispose();
+    _cameraShouldRun = false;
+    // dispose 를 체인 밖에서 즉시 호출하면 native start 가 진행 중일 때 stop 이
+    // 생략돼 카메라 리소스가 샐 수 있다. 진행 중 start/stop 이 끝난 뒤 정지하고
+    // dispose 하도록 체인 끝에 예약한다. dispose() 는 Future<void> 이고 내부
+    // native stop 이 throw 할 수 있어 catchError 로 흡수한다(_recordScannerError
+    // 는 State 를 참조하지 않아 dispose 이후에도 안전).
+    final controller = _scannerController;
+    _cameraOp = _cameraOp.then<void>((_) async {
+      // stop 이 실패해도 dispose 는 반드시 호출돼야 컨트롤러가 누수되지 않는다.
+      try {
+        if (controller.value.isRunning) {
+          await controller.stop();
+        }
+      } catch (error, stack) {
+        _recordScannerError(error, stack);
+      }
+      await controller.dispose();
+    }).catchError(_recordScannerError);
     super.dispose();
   }
 
@@ -80,27 +117,52 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     }
   }
 
-  /// 카메라 start. 이미 실행 중이거나 시작 중이면 중복 호출 시 예외가 나므로
-  /// 건너뛴다(생명주기 복귀·권한 승인이 겹치는 경쟁 상황 방지).
-  Future<void> _safeStartScanner() async {
-    final value = _scannerController.value;
-    if (value.isRunning || value.isStarting) return;
-    try {
-      await _scannerController.start();
-    } on MobileScannerException catch (error, stack) {
-      _recordScannerError(error, stack);
-    } on PlatformException catch (error, stack) {
-      _recordScannerError(error, stack);
-    }
+  /// 현재 lifecycle·스캔 상태로부터 카메라 목표 상태를 도출해 반영한다.
+  /// 마지막 이벤트 값이 아니라 (_appResumed && status==scanning &&
+  /// permissionGranted) 결합 조건으로 계산한다. permissionGranted 를 함께 봐서,
+  /// 재조회가 끝나기 전 resumeScanning 이 status 를 scanning 으로 만든 경쟁
+  /// 상황에서도 권한이 확인되지 않았으면 카메라를 켜지 않는다.
+  /// 계산된 목표를 _cameraOp 체인에 직렬화해 stop↔start 가 겹치지 않게 한다.
+  void _syncCamera() {
+    final scanState = ref.read(scanControllerProvider);
+    final scanning = scanState.status == ScanStatus.scanning &&
+        scanState.permissionGranted;
+    _cameraShouldRun = mounted && _appResumed && scanning;
+    // 앞 작업이 실패로 끝나도 체인이 rejected 로 굳어 이후 작업이 전부 스킵되지
+    // 않도록, 체인 끝에 catchError 안전망을 둬 다음 작업이 계속 실행되게 한다.
+    _cameraOp = _cameraOp
+        .then((_) => _reconcileCamera())
+        .catchError(_recordScannerError);
   }
 
-  /// 카메라 stop. dispose 이후 등 예외가 나도 앱을 죽이지 않는다.
-  Future<void> _safeStopScanner() async {
+  /// 목표 상태(_cameraShouldRun)와 컨트롤러 실제 상태가 어긋나면 한 단계 맞춘다.
+  /// _syncCamera 를 통해 직렬화되어 호출되므로 앞선 start/stop 이 완료된 뒤
+  /// 실행된다 — 진행 중 작업이 끝난 최신 상태를 보고 재조정한다.
+  Future<void> _reconcileCamera() async {
+    if (!mounted) return; // dispose 이후 큐에 남은 작업은 건너뛴다.
     try {
-      await _scannerController.stop();
+      final value = _scannerController.value;
+      if (_cameraShouldRun) {
+        if (!value.isRunning && !value.isStarting) {
+          await _scannerController.start();
+          // start() 는 native 초기화 실패를 throw 하지 않고 value.error 에
+          // 저장한 뒤 정상 반환할 수 있다(패키지 구현). 성공 시 copyWith 가
+          // error 를 null 로 지우므로, 실패(!isRunning && error!=null)일 때만
+          // 비치명적으로 기록해 관측 가능하게 한다.
+          final started = _scannerController.value;
+          if (!started.isRunning && started.error != null) {
+            _recordScannerError(started.error!, StackTrace.current);
+          }
+        }
+      } else if (value.isRunning) {
+        await _scannerController.stop();
+      }
     } on MobileScannerException catch (error, stack) {
       _recordScannerError(error, stack);
     } on PlatformException catch (error, stack) {
+      _recordScannerError(error, stack);
+    } on UnsupportedError catch (error, stack) {
+      // web 등 미지원 플랫폼에서 start/stop 이 UnsupportedError 를 던질 수 있다.
       _recordScannerError(error, stack);
     }
   }
@@ -115,13 +177,14 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     if (result == null || !mounted) return;
 
     HapticFeedback.mediumImpact();
-    // 카메라는 비동기로 멈춰도 되지만, context 사용 전에는 await 하지 않는다
-    // — analyzer 의 use_build_context_synchronously 룰을 충족시키기 위함.
-    unawaited(_safeStopScanner());
+    // processBarcode 로 status 가 processing 이 됐으므로 _syncCamera 는 카메라를
+    // 멈춘다. _syncCamera 는 동기 호출(작업은 체인에 예약)이라 context 사용 전
+    // await 하지 않아 use_build_context_synchronously 룰도 충족한다.
+    _syncCamera();
     await pushResult(context, result);
     if (!mounted) return;
-    notifier.resumeScanning();
-    await _safeStartScanner();
+    notifier.resumeScanning(); // status 를 다시 scanning 으로 → 카메라 재개
+    _syncCamera();
   }
 
   Future<void> _toggleTorch() async {
@@ -131,6 +194,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       _recordScannerError(error, stack);
       return;
     } on PlatformException catch (error, stack) {
+      _recordScannerError(error, stack);
+      return;
+    } on UnsupportedError catch (error, stack) {
+      // web 의 toggleTorch() 는 UnsupportedError 를 던진다(플래시 미지원).
       _recordScannerError(error, stack);
       return;
     }
@@ -166,14 +233,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   Widget build(BuildContext context) {
     final scanState = ref.watch(scanControllerProvider);
 
-    // 권한이 부여된 직후에는 한 번만 스캐너를 start 한다.
+    // status 또는 permissionGranted 가 바뀔 때마다 카메라 목표 상태를 재도출한다
+    // (권한 승인 직후 scanning 전이, 재조회 실패로 권한이 내려가는 경우 포함).
+    // 목표 계산·직렬화는 _syncCamera 가 담당한다.
     ref.listen<ScanState>(scanControllerProvider, (prev, next) {
-      if (prev?.status != next.status &&
-          next.status == ScanStatus.scanning &&
-          (prev?.status == ScanStatus.idle ||
-              prev?.status == ScanStatus.permissionDenied ||
-              prev == null)) {
-        unawaited(_safeStartScanner());
+      if (prev?.status != next.status ||
+          prev?.permissionGranted != next.permissionGranted) {
+        _syncCamera();
       }
     });
 
