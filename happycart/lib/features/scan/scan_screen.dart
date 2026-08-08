@@ -52,11 +52,17 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       detectionTimeoutMs: 250,
       autoStart: false,
     );
-    // 위젯이 실제로 빌드된 다음 권한 요청을 시작한다.
+    // 위젯이 실제로 빌드된 다음 권한 요청을 시작한다. 권한 요청은 플랫폼 채널
+    // 호출이라 실패할 수 있어 non-fatal 로 기록한다.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _permissionRequested) return;
       _permissionRequested = true;
-      ref.read(scanControllerProvider.notifier).requestPermission();
+      unawaited(
+        ref
+            .read(scanControllerProvider.notifier)
+            .requestPermission()
+            .catchError(_recordScannerError),
+      );
     });
   }
 
@@ -69,8 +75,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     if (_appResumed) {
       notifier.resume(); // 권한 유지 시 즉시 복원(빠른 경로)
       // 설정 앱에서 권한이 바뀌었을 수 있으니 재조회해 상태를 동기화한다.
+      // 권한 조회는 플랫폼 채널 호출이라 실패할 수 있어 non-fatal 로 기록한다.
       // status 가 바뀌면 ref.listen 이 _syncCamera 를 다시 호출한다.
-      unawaited(notifier.refreshPermission());
+      unawaited(notifier.refreshPermission().catchError(_recordScannerError));
     } else {
       notifier.pause();
     }

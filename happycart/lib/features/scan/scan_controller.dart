@@ -83,20 +83,35 @@ class ScanController extends Notifier<ScanState> {
   // 카메라 권한이 승인됐는지. 최초 idle(권한 대기)과 pause 로 만들어진 idle 을
   // 구분해 [resume] 이 승인 전 스캔을 시작하지 않도록 하는 데 쓴다.
   bool _permissionGranted = false;
+  // 권한 작업(요청/재조회) 세대 토큰. 여러 작업이 겹칠 때 가장 최근에 시작한
+  // 작업의 결과만 반영해, 늦게 끝난 오래된 조회가 최신 상태를 덮어쓰지 않게 한다.
+  int _permissionGeneration = 0;
 
   @override
   ScanState build() => const ScanState(status: ScanStatus.idle);
 
-  /// 카메라 권한을 요청하고 결과에 따라 상태를 전이한다.
-  Future<void> requestPermission() async {
-    final requester = ref.read(cameraPermissionRequesterProvider);
-    final result = await requester();
-    if (result.isGranted) {
-      _permissionGranted = true;
-      state = state.copyWith(status: ScanStatus.scanning);
-    } else {
+  /// 권한 결과를 상태에 반영한다. 승인이면 대기(idle)/거부(permissionDenied)
+  /// 상태에서 scanning 으로, 미승인이면 permissionDenied 로 전이한다.
+  void _applyPermissionResult(bool granted) {
+    _permissionGranted = granted;
+    if (granted) {
+      if (state.status == ScanStatus.permissionDenied ||
+          state.status == ScanStatus.idle) {
+        state = state.copyWith(status: ScanStatus.scanning);
+      }
+    } else if (state.status != ScanStatus.permissionDenied) {
       state = state.copyWith(status: ScanStatus.permissionDenied);
     }
+  }
+
+  /// 카메라 권한을 요청하고 결과에 따라 상태를 전이한다.
+  Future<void> requestPermission() async {
+    final generation = ++_permissionGeneration;
+    final requester = ref.read(cameraPermissionRequesterProvider);
+    final result = await requester();
+    // 이 작업 이후 더 최신 권한 작업이 시작됐다면 오래된 결과는 폐기한다.
+    if (generation != _permissionGeneration) return;
+    _applyPermissionResult(result.isGranted);
   }
 
   /// 바코드 detection 콜백에서 호출.
@@ -149,7 +164,11 @@ class ScanController extends Notifier<ScanState> {
 
   /// 결과 화면이 닫힌 뒤 스캐너를 재개한다.
   void resumeScanning() {
-    state = state.copyWith(status: ScanStatus.scanning);
+    // 결과 화면 도중 설정에서 권한이 철회됐을 수 있으므로, 승인 상태일 때만
+    // scanning 으로 되돌린다(권한 없이 카메라를 재시작하지 않도록).
+    if (_permissionGranted) {
+      state = state.copyWith(status: ScanStatus.scanning);
+    }
   }
 
   /// 라이프사이클: 백그라운드 진입 시 호출.
@@ -172,18 +191,17 @@ class ScanController extends Notifier<ScanState> {
   /// 동기화한다. 설정 앱에서 권한이 바뀐 경우를 반영한다:
   /// - 거부→승인: permissionDenied/idle → scanning 으로 복구
   /// - 승인→철회: scanning 등 → permissionDenied
+  ///
+  /// 조회기(`Permission.camera.status`)는 플랫폼 채널을 호출하므로 실패 시
+  /// 예외를 던질 수 있다. 예외는 여기서 삼키지 않고 호출측이 non-fatal 로
+  /// 기록하도록 전파한다(상태는 그대로 유지됨).
   Future<void> refreshPermission() async {
+    final generation = ++_permissionGeneration;
     final checker = ref.read(cameraPermissionCheckerProvider);
     final status = await checker();
-    _permissionGranted = status.isGranted;
-    if (_permissionGranted) {
-      if (state.status == ScanStatus.permissionDenied ||
-          state.status == ScanStatus.idle) {
-        state = state.copyWith(status: ScanStatus.scanning);
-      }
-    } else if (state.status != ScanStatus.permissionDenied) {
-      state = state.copyWith(status: ScanStatus.permissionDenied);
-    }
+    // 이 조회 이후 더 최신 권한 작업이 시작됐다면 오래된 결과는 폐기한다.
+    if (generation != _permissionGeneration) return;
+    _applyPermissionResult(status.isGranted);
   }
 }
 

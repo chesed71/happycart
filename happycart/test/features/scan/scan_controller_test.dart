@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:happycart/features/scan/scan_controller.dart';
@@ -103,5 +105,76 @@ void main() {
       container.read(scanControllerProvider).status,
       ScanStatus.permissionDenied,
     );
+  });
+
+  // 결과 화면 도중 권한이 철회(refreshPermission→permissionDenied)됐다면, 화면이
+  // 닫히며 호출되는 resumeScanning 이 권한 없이 scanning 으로 되돌리면 안 된다.
+  test('철회 후 resumeScanning 은 permissionDenied 를 유지한다', () async {
+    final container = _containerWith(
+      PermissionStatus.granted,
+      checkStatus: PermissionStatus.denied,
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    await notifier.requestPermission(); // 승인 → scanning
+    await notifier.refreshPermission(); // 설정에서 철회 → permissionDenied
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.permissionDenied,
+    );
+
+    notifier.resumeScanning(); // 결과 화면 닫힘
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.permissionDenied,
+    );
+  });
+
+  // 권한 조회가 역순으로 완료돼도(오래된 조회가 나중에 끝남) 최신 결과만 반영한다.
+  test('refreshPermission: 오래된 조회가 최신 결과를 덮어쓰지 않는다', () async {
+    final completers = <Completer<PermissionStatus>>[Completer(), Completer()];
+    var callCount = 0;
+    final container = ProviderContainer(
+      overrides: [
+        cameraPermissionCheckerProvider
+            .overrideWith((ref) => () => completers[callCount++].future),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    final f1 = notifier.refreshPermission(); // gen1 (오래된)
+    final f2 = notifier.refreshPermission(); // gen2 (최신)
+
+    completers[1].complete(PermissionStatus.granted); // 최신 먼저 완료
+    await f2;
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
+
+    completers[0].complete(PermissionStatus.denied); // 오래된 나중 완료 → 폐기
+    await f1;
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
+  });
+
+  // 권한 조회 실패는 컨트롤러가 삼키지 않고 전파하며(호출측이 non-fatal 처리),
+  // 기존 상태는 그대로 유지한다.
+  test('refreshPermission: 조회 실패 시 예외를 전파하고 상태를 유지한다', () async {
+    final container = ProviderContainer(
+      overrides: [
+        cameraPermissionRequesterProvider
+            .overrideWith((ref) => () async => PermissionStatus.granted),
+        cameraPermissionCheckerProvider.overrideWith(
+          (ref) => () async => throw Exception('permission check failed'),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    await notifier.requestPermission(); // scanning
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
+
+    await expectLater(notifier.refreshPermission(), throwsA(isA<Exception>()));
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
   });
 }
