@@ -86,9 +86,10 @@ class ScanController extends Notifier<ScanState> {
   // 권한 작업(요청/재조회) 세대 토큰. 여러 작업이 겹칠 때 가장 최근에 시작한
   // 작업의 결과만 반영해, 늦게 끝난 오래된 조회가 최신 상태를 덮어쓰지 않게 한다.
   int _permissionGeneration = 0;
-  // 명시적 권한 "요청"(다이얼로그)이 진행 중인지. 요청 결과가 권위이므로 그
-  // 사이의 재조회(refresh)가 요청을 무효화하지 않도록 하는 데 쓴다.
-  bool _requestInProgress = false;
+  // 진행 중인 명시적 권한 "요청"(다이얼로그) 개수. 요청 결과가 권위이므로 그
+  // 사이의 재조회(refresh)가 요청을 무효화하지 않도록 하는 데 쓴다. 중복 요청도
+  // 안전하도록 boolean 이 아니라 카운터로 둔다(모두 끝나야 0).
+  int _pendingRequests = 0;
 
   @override
   ScanState build() => const ScanState(status: ScanStatus.idle);
@@ -109,7 +110,7 @@ class ScanController extends Notifier<ScanState> {
 
   /// 카메라 권한을 요청하고 결과에 따라 상태를 전이한다.
   Future<void> requestPermission() async {
-    _requestInProgress = true;
+    _pendingRequests++;
     // 진행 중이던 재조회(refresh)가 있으면 그 결과를 무효화한다(요청 우선).
     final generation = ++_permissionGeneration;
     try {
@@ -118,7 +119,7 @@ class ScanController extends Notifier<ScanState> {
       if (generation != _permissionGeneration) return;
       _applyPermissionResult(result.isGranted);
     } finally {
-      _requestInProgress = false;
+      _pendingRequests--;
     }
   }
 
@@ -199,10 +200,23 @@ class ScanController extends Notifier<ScanState> {
   Future<void> refreshPermission() async {
     // 명시적 권한 요청(다이얼로그)이 진행 중이면 재조회를 건너뛴다 — 요청
     // 결과가 권위이므로 재조회가 이를 무효화하지 않도록.
-    if (_requestInProgress) return;
+    if (_pendingRequests > 0) return;
     final generation = ++_permissionGeneration;
     final checker = ref.read(cameraPermissionCheckerProvider);
-    final status = await checker();
+    final PermissionStatus status;
+    try {
+      status = await checker();
+    } on Object {
+      // 조회 실패 시 권한을 미확정으로 간주(fail-closed): 결과 화면 도중
+      // background→복귀처럼 status 가 processing 으로 남는 경우에도, 화면이
+      // 닫히며 호출되는 resumeScanning 이 stale 승인값으로 스캔을 재개하지
+      // 않도록 _permissionGranted 를 내린다. 예외는 호출측 non-fatal 기록을
+      // 위해 전파한다.
+      if (generation == _permissionGeneration) {
+        _permissionGranted = false;
+      }
+      rethrow;
+    }
     // 이 조회 이후 더 최신 권한 작업이 시작됐다면 오래된 결과는 폐기한다.
     if (generation != _permissionGeneration) return;
     _applyPermissionResult(status.isGranted);

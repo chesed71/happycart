@@ -170,8 +170,9 @@ void main() {
   });
 
   // 권한 조회 실패는 컨트롤러가 삼키지 않고 전파하며(호출측이 non-fatal 처리),
-  // 기존 상태는 그대로 유지한다.
-  test('refreshPermission: 조회 실패 시 예외를 전파하고 상태를 유지한다', () async {
+  // 권한을 미확정(fail-closed)으로 내려 이후 resumeScanning 이 stale 승인값으로
+  // 스캔을 재개하지 않도록 한다.
+  test('refreshPermission: 조회 실패 시 예외 전파 + 이후 resumeScanning fail-closed', () async {
     final container = ProviderContainer(
       overrides: [
         cameraPermissionRequesterProvider
@@ -184,10 +185,15 @@ void main() {
     addTearDown(container.dispose);
     final notifier = container.read(scanControllerProvider.notifier);
 
-    await notifier.requestPermission(); // scanning
-    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
+    await notifier.requestPermission(); // 승인 → scanning, granted=true
+    notifier.pause(); // idle
+    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
 
+    // 조회 실패: 예외는 전파되고 권한은 미확정으로 내려간다.
     await expectLater(notifier.refreshPermission(), throwsA(isA<Exception>()));
-    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
+
+    // 권한 미확정이므로 결과 화면이 닫혀도 스캔을 재개하지 않는다(카메라 off 유지).
+    notifier.resumeScanning();
+    expect(container.read(scanControllerProvider).status, ScanStatus.idle);
   });
 }
