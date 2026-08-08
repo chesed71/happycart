@@ -199,6 +199,37 @@ void main() {
     expect(container.read(scanControllerProvider).status, ScanStatus.idle);
   });
 
+  // 재조회가 완료되기 전에 결과 화면이 닫혀 resumeScanning 이 stale 승인값으로
+  // scanning 을 복원해도, 뒤늦게 도착한 재조회 실패가 permissionGranted 를 내려
+  // 카메라가 게이트되도록 한다(status 가 scanning 이어도 permissionGranted=false).
+  test('재조회 완료 전 stale scanning 이후 늦은 조회 실패는 permissionGranted 를 내린다', () async {
+    final checkCompleter = Completer<PermissionStatus>();
+    final container = ProviderContainer(
+      overrides: [
+        cameraPermissionRequesterProvider
+            .overrideWith((ref) => () async => PermissionStatus.granted),
+        cameraPermissionCheckerProvider
+            .overrideWith((ref) => () => checkCompleter.future),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    await notifier.requestPermission(); // scanning, permissionGranted=true
+    final refreshFuture = notifier.refreshPermission(); // 복귀: in-flight
+
+    // 재조회 완료 전 결과 화면 닫힘 → stale 승인값으로 scanning 복원
+    notifier.resumeScanning();
+    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
+    expect(container.read(scanControllerProvider).permissionGranted, isTrue);
+
+    // 뒤늦게 재조회 실패 도착 → fail-closed 로 permissionGranted 내려감
+    checkCompleter.completeError(Exception('permission check failed'));
+    await expectLater(refreshFuture, throwsA(isA<Exception>()));
+    expect(container.read(scanControllerProvider).permissionGranted, isFalse);
+    // status 는 scanning 이라도 permissionGranted=false 라 카메라 제어가 켜지지 않음.
+  });
+
   // 결과 화면(processing) 도중 권한 철회 + 조회 실패로 fail-closed 된 뒤 화면이
   // 닫히면, processing 에 갇히지 않고 안내 화면으로 빠져나온다.
   test('processing 중 조회 실패 후 결과 화면이 닫히면 processing 에 갇히지 않는다', () async {

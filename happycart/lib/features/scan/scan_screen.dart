@@ -118,12 +118,15 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 
   /// 현재 lifecycle·스캔 상태로부터 카메라 목표 상태를 도출해 반영한다.
-  /// 마지막 이벤트 값이 아니라 (_appResumed && status==scanning) 결합 조건으로
-  /// 계산하므로, inactive 중 권한 승인 같은 이벤트 겹침에도 잘못 시작하지 않는다.
+  /// 마지막 이벤트 값이 아니라 (_appResumed && status==scanning &&
+  /// permissionGranted) 결합 조건으로 계산한다. permissionGranted 를 함께 봐서,
+  /// 재조회가 끝나기 전 resumeScanning 이 status 를 scanning 으로 만든 경쟁
+  /// 상황에서도 권한이 확인되지 않았으면 카메라를 켜지 않는다.
   /// 계산된 목표를 _cameraOp 체인에 직렬화해 stop↔start 가 겹치지 않게 한다.
   void _syncCamera() {
-    final scanning =
-        ref.read(scanControllerProvider).status == ScanStatus.scanning;
+    final scanState = ref.read(scanControllerProvider);
+    final scanning = scanState.status == ScanStatus.scanning &&
+        scanState.permissionGranted;
     _cameraShouldRun = mounted && _appResumed && scanning;
     // 앞 작업이 실패로 끝나도 체인이 rejected 로 굳어 이후 작업이 전부 스킵되지
     // 않도록, 체인 끝에 catchError 안전망을 둬 다음 작업이 계속 실행되게 한다.
@@ -230,10 +233,12 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   Widget build(BuildContext context) {
     final scanState = ref.watch(scanControllerProvider);
 
-    // status 가 바뀔 때마다 카메라 목표 상태를 재도출한다(권한 승인 직후 scanning
-    // 전이 포함). 목표 계산·직렬화는 _syncCamera 가 담당한다.
+    // status 또는 permissionGranted 가 바뀔 때마다 카메라 목표 상태를 재도출한다
+    // (권한 승인 직후 scanning 전이, 재조회 실패로 권한이 내려가는 경우 포함).
+    // 목표 계산·직렬화는 _syncCamera 가 담당한다.
     ref.listen<ScanState>(scanControllerProvider, (prev, next) {
-      if (prev?.status != next.status) {
+      if (prev?.status != next.status ||
+          prev?.permissionGranted != next.permissionGranted) {
         _syncCamera();
       }
     });

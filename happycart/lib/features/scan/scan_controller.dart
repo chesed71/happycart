@@ -23,18 +23,26 @@ class ScanState {
   final ScanStatus status;
   final ResultState? lastResult;
 
+  /// 카메라 권한이 "확인된" 승인 상태인지. 실제 카메라 제어(UI)가 이 값을 함께
+  /// 보고 켜지므로, status 가 (경쟁으로) scanning 이더라도 권한이 미확정이면
+  /// 카메라를 시작하지 않는다.
+  final bool permissionGranted;
+
   const ScanState({
     required this.status,
     this.lastResult,
+    this.permissionGranted = false,
   });
 
   ScanState copyWith({
     ScanStatus? status,
     ResultState? lastResult,
+    bool? permissionGranted,
   }) {
     return ScanState(
       status: status ?? this.status,
       lastResult: lastResult ?? this.lastResult,
+      permissionGranted: permissionGranted ?? this.permissionGranted,
     );
   }
 
@@ -44,10 +52,11 @@ class ScanState {
       other is ScanState &&
           runtimeType == other.runtimeType &&
           status == other.status &&
-          lastResult == other.lastResult;
+          lastResult == other.lastResult &&
+          permissionGranted == other.permissionGranted;
 
   @override
-  int get hashCode => Object.hash(status, lastResult);
+  int get hashCode => Object.hash(status, lastResult, permissionGranted);
 }
 
 /// 권한 요청을 mock 하기 위한 얇은 추상화.
@@ -80,9 +89,6 @@ final cameraPermissionCheckerProvider =
 /// - 인식된 바코드 → 검증 → Repository 조회 → ResultState 매핑 →
 ///   AnalyticsClient 로깅. 라우팅은 UI 레이어가 담당한다.
 class ScanController extends Notifier<ScanState> {
-  // 카메라 권한이 승인됐는지. 최초 idle(권한 대기)과 pause 로 만들어진 idle 을
-  // 구분해 [resume] 이 승인 전 스캔을 시작하지 않도록 하는 데 쓴다.
-  bool _permissionGranted = false;
   // 권한 작업(요청/재조회) 세대 토큰. 여러 작업이 겹칠 때 가장 최근에 시작한
   // 작업의 결과만 반영해, 늦게 끝난 오래된 조회가 최신 상태를 덮어쓰지 않게 한다.
   int _permissionGeneration = 0;
@@ -96,15 +102,21 @@ class ScanController extends Notifier<ScanState> {
 
   /// 권한 결과를 상태에 반영한다. 승인이면 대기(idle)/거부(permissionDenied)
   /// 상태에서 scanning 으로, 미승인이면 permissionDenied 로 전이한다.
+  /// permissionGranted 는 항상 함께 갱신해 카메라 제어가 반응하도록 한다.
   void _applyPermissionResult(bool granted) {
-    _permissionGranted = granted;
     if (granted) {
-      if (state.status == ScanStatus.permissionDenied ||
-          state.status == ScanStatus.idle) {
-        state = state.copyWith(status: ScanStatus.scanning);
-      }
-    } else if (state.status != ScanStatus.permissionDenied) {
-      state = state.copyWith(status: ScanStatus.permissionDenied);
+      final resume = state.status == ScanStatus.permissionDenied ||
+          state.status == ScanStatus.idle;
+      state = state.copyWith(
+        status: resume ? ScanStatus.scanning : null,
+        permissionGranted: true,
+      );
+    } else {
+      final deny = state.status != ScanStatus.permissionDenied;
+      state = state.copyWith(
+        status: deny ? ScanStatus.permissionDenied : null,
+        permissionGranted: false,
+      );
     }
   }
 
@@ -174,8 +186,10 @@ class ScanController extends Notifier<ScanState> {
   /// 결과 화면이 닫힌 뒤 스캐너를 재개한다.
   void resumeScanning() {
     // 결과 화면 도중 설정에서 권한이 철회됐을 수 있으므로, 승인 상태일 때만
-    // scanning 으로 되돌린다(권한 없이 카메라를 재시작하지 않도록).
-    if (_permissionGranted) {
+    // scanning 으로 되돌린다(권한 없이 카메라를 재시작하지 않도록). 설령 여기서
+    // scanning 으로 복원되더라도, 진행 중인 재조회가 실패로 permissionGranted 를
+    // 내리면 카메라 제어(_syncCamera)가 이를 보고 카메라를 켜지 않는다.
+    if (state.permissionGranted) {
       state = state.copyWith(status: ScanStatus.scanning);
     } else if (state.status == ScanStatus.processing) {
       // 권한 미확정/철회 상태에서 결과 화면이 닫히면 processing 에 갇히지 않도록
@@ -211,13 +225,12 @@ class ScanController extends Notifier<ScanState> {
     try {
       status = await checker();
     } on Object {
-      // 조회 실패 시 권한을 미확정으로 간주(fail-closed): 결과 화면 도중
-      // background→복귀처럼 status 가 processing 으로 남는 경우에도, 화면이
-      // 닫히며 호출되는 resumeScanning 이 stale 승인값으로 스캔을 재개하지
-      // 않도록 _permissionGranted 를 내린다. 예외는 호출측 non-fatal 기록을
-      // 위해 전파한다.
-      if (generation == _permissionGeneration) {
-        _permissionGranted = false;
+      // 조회 실패 시 권한을 미확정으로 간주(fail-closed): permissionGranted 를
+      // 내려 카메라 제어(_syncCamera)가 status 와 무관하게 카메라를 켜지 않도록
+      // 하고(진행 중 resumeScanning 이 stale 로 scanning 을 만든 경우도 방지),
+      // 예외는 호출측 non-fatal 기록을 위해 전파한다.
+      if (generation == _permissionGeneration && state.permissionGranted) {
+        state = state.copyWith(permissionGranted: false);
       }
       rethrow;
     }
