@@ -61,6 +61,18 @@ Future<PermissionStatus> _defaultCameraPermissionRequester() {
 final cameraPermissionRequesterProvider =
     Provider<CameraPermissionRequester>((_) => _defaultCameraPermissionRequester);
 
+/// 권한 "조회"(요청 아님)를 mock 하기 위한 얇은 추상화. foreground 복귀 시
+/// 설정 앱에서 바뀐 권한을 다이얼로그 없이 재확인하는 데 쓴다.
+typedef CameraPermissionChecker = Future<PermissionStatus> Function();
+
+Future<PermissionStatus> _defaultCameraPermissionChecker() {
+  return Permission.camera.status;
+}
+
+/// 권한 조회기 — 테스트에서는 [overrideWith] 로 mock 한다.
+final cameraPermissionCheckerProvider =
+    Provider<CameraPermissionChecker>((_) => _defaultCameraPermissionChecker);
+
 /// 스캔 화면 컨트롤러 (스펙 §6.1, §7).
 ///
 /// 책임:
@@ -68,6 +80,10 @@ final cameraPermissionRequesterProvider =
 /// - 인식된 바코드 → 검증 → Repository 조회 → ResultState 매핑 →
 ///   AnalyticsClient 로깅. 라우팅은 UI 레이어가 담당한다.
 class ScanController extends Notifier<ScanState> {
+  // 카메라 권한이 승인됐는지. 최초 idle(권한 대기)과 pause 로 만들어진 idle 을
+  // 구분해 [resume] 이 승인 전 스캔을 시작하지 않도록 하는 데 쓴다.
+  bool _permissionGranted = false;
+
   @override
   ScanState build() => const ScanState(status: ScanStatus.idle);
 
@@ -76,6 +92,7 @@ class ScanController extends Notifier<ScanState> {
     final requester = ref.read(cameraPermissionRequesterProvider);
     final result = await requester();
     if (result.isGranted) {
+      _permissionGranted = true;
       state = state.copyWith(status: ScanStatus.scanning);
     } else {
       state = state.copyWith(status: ScanStatus.permissionDenied);
@@ -144,8 +161,28 @@ class ScanController extends Notifier<ScanState> {
 
   /// 라이프사이클: 포그라운드 복귀 시 호출.
   void resume() {
-    if (state.status == ScanStatus.idle) {
+    // 최초 idle(권한 대기)은 승인 전까지 scanning 으로 올리지 않는다. 권한
+    // 다이얼로그로 resumed 가 권한 결과보다 먼저 와도 조기 시작하지 않도록.
+    if (_permissionGranted && state.status == ScanStatus.idle) {
       state = state.copyWith(status: ScanStatus.scanning);
+    }
+  }
+
+  /// foreground 복귀 시 실제 카메라 권한을 다이얼로그 없이 재조회해 상태를
+  /// 동기화한다. 설정 앱에서 권한이 바뀐 경우를 반영한다:
+  /// - 거부→승인: permissionDenied/idle → scanning 으로 복구
+  /// - 승인→철회: scanning 등 → permissionDenied
+  Future<void> refreshPermission() async {
+    final checker = ref.read(cameraPermissionCheckerProvider);
+    final status = await checker();
+    _permissionGranted = status.isGranted;
+    if (_permissionGranted) {
+      if (state.status == ScanStatus.permissionDenied ||
+          state.status == ScanStatus.idle) {
+        state = state.copyWith(status: ScanStatus.scanning);
+      }
+    } else if (state.status != ScanStatus.permissionDenied) {
+      state = state.copyWith(status: ScanStatus.permissionDenied);
     }
   }
 }
