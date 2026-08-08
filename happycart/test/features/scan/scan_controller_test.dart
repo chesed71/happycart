@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:happycart/data/analytics_client.dart';
+import 'package:happycart/data/product_repository.dart';
 import 'package:happycart/features/scan/scan_controller.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -195,5 +197,55 @@ void main() {
     // 권한 미확정이므로 결과 화면이 닫혀도 스캔을 재개하지 않는다(카메라 off 유지).
     notifier.resumeScanning();
     expect(container.read(scanControllerProvider).status, ScanStatus.idle);
+  });
+
+  // 결과 화면(processing) 도중 권한 철회 + 조회 실패로 fail-closed 된 뒤 화면이
+  // 닫히면, processing 에 갇히지 않고 안내 화면으로 빠져나온다.
+  test('processing 중 조회 실패 후 결과 화면이 닫히면 processing 에 갇히지 않는다', () async {
+    Future<dynamic> emptyRpc(String fnName, {Map<String, dynamic>? params}) async {
+      return <Map<String, dynamic>>[];
+    }
+
+    final container = ProviderContainer(
+      overrides: [
+        cameraPermissionRequesterProvider
+            .overrideWith((ref) => () async => PermissionStatus.granted),
+        cameraPermissionCheckerProvider.overrideWith(
+          (ref) => () async => throw Exception('permission check failed'),
+        ),
+        productRepositoryProvider.overrideWith(
+          (ref) => ProductRepository.forTesting(rpc: emptyRpc),
+        ),
+        analyticsClientProvider.overrideWith(
+          (ref) => AnalyticsClient.forTesting(
+            rpc: emptyRpc,
+            appVersion: 'test',
+            platform: 'test',
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    await notifier.requestPermission(); // 승인 → scanning
+    await notifier.processBarcode('4006381333931'); // → processing
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.processing,
+    );
+
+    // 결과 화면 도중 background→복귀, 실제 권한 철회 + 조회 실패 → fail-closed
+    await expectLater(notifier.refreshPermission(), throwsA(isA<Exception>()));
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.processing,
+    );
+
+    notifier.resumeScanning(); // 결과 화면 닫힘 → processing 탈출
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.permissionDenied,
+    );
   });
 }

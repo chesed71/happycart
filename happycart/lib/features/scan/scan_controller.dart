@@ -177,6 +177,10 @@ class ScanController extends Notifier<ScanState> {
     // scanning 으로 되돌린다(권한 없이 카메라를 재시작하지 않도록).
     if (_permissionGranted) {
       state = state.copyWith(status: ScanStatus.scanning);
+    } else if (state.status == ScanStatus.processing) {
+      // 권한 미확정/철회 상태에서 결과 화면이 닫히면 processing 에 갇히지 않도록
+      // 안내 화면으로 보낸다(다음 복귀의 재조회가 승인을 확인하면 자동 복구).
+      state = state.copyWith(status: ScanStatus.permissionDenied);
     }
   }
 
