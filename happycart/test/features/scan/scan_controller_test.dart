@@ -199,10 +199,10 @@ void main() {
     expect(container.read(scanControllerProvider).status, ScanStatus.idle);
   });
 
-  // 재조회가 완료되기 전에 결과 화면이 닫혀 resumeScanning 이 stale 승인값으로
-  // scanning 을 복원해도, 뒤늦게 도착한 재조회 실패가 permissionGranted 를 내려
-  // 카메라가 게이트되도록 한다(status 가 scanning 이어도 permissionGranted=false).
-  test('재조회 완료 전 stale scanning 이후 늦은 조회 실패는 permissionGranted 를 내린다', () async {
+  // 재조회가 진행 중이면 permissionGranted 가 "미확인(false)"으로 내려가, 조회가
+  // 끝나기 전 resumeScanning 이 호출돼도 stale 승인값으로 카메라를 시작하지
+  // 못한다(일시적 stale start 방지). 조회 실패 후에도 fail-closed 로 유지된다.
+  test('재조회 진행 중에는 permissionGranted 가 내려가 stale start 를 막는다', () async {
     final checkCompleter = Completer<PermissionStatus>();
     final container = ProviderContainer(
       overrides: [
@@ -216,18 +216,19 @@ void main() {
     final notifier = container.read(scanControllerProvider.notifier);
 
     await notifier.requestPermission(); // scanning, permissionGranted=true
-    final refreshFuture = notifier.refreshPermission(); // 복귀: in-flight
-
-    // 재조회 완료 전 결과 화면 닫힘 → stale 승인값으로 scanning 복원
-    notifier.resumeScanning();
-    expect(container.read(scanControllerProvider).status, ScanStatus.scanning);
     expect(container.read(scanControllerProvider).permissionGranted, isTrue);
 
-    // 뒤늦게 재조회 실패 도착 → fail-closed 로 permissionGranted 내려감
+    final refreshFuture = notifier.refreshPermission(); // 시작 → 권한 미확인
+    expect(container.read(scanControllerProvider).permissionGranted, isFalse);
+
+    // 재조회 완료 전 결과 화면 닫힘 → stale 승인값이 없어 카메라 시작 안 됨.
+    notifier.resumeScanning();
+    expect(container.read(scanControllerProvider).permissionGranted, isFalse);
+
+    // 뒤늦게 재조회 실패 도착 → 여전히 fail-closed.
     checkCompleter.completeError(Exception('permission check failed'));
     await expectLater(refreshFuture, throwsA(isA<Exception>()));
     expect(container.read(scanControllerProvider).permissionGranted, isFalse);
-    // status 는 scanning 이라도 permissionGranted=false 라 카메라 제어가 켜지지 않음.
   });
 
   // 결과 화면(processing) 도중 권한 철회 + 조회 실패로 fail-closed 된 뒤 화면이
@@ -278,5 +279,57 @@ void main() {
       container.read(scanControllerProvider).status,
       ScanStatus.permissionDenied,
     );
+  });
+
+  // processing 도중 복귀 재조회가 아직 in-flight 인 상태에서 결과 화면이 먼저
+  // 닫혀도, permissionGranted 가 내려가 있어 stale scanning 으로 카메라를 켜지
+  // 않고 안내 화면으로 빠져나온다. 이후 조회 실패해도 fail-closed 유지.
+  test('processing 중 in-flight 재조회 + resumeScanning: stale start 없이 탈출', () async {
+    Future<dynamic> emptyRpc(String fnName, {Map<String, dynamic>? params}) async {
+      return <Map<String, dynamic>>[];
+    }
+
+    final checkCompleter = Completer<PermissionStatus>();
+    final container = ProviderContainer(
+      overrides: [
+        cameraPermissionRequesterProvider
+            .overrideWith((ref) => () async => PermissionStatus.granted),
+        cameraPermissionCheckerProvider
+            .overrideWith((ref) => () => checkCompleter.future),
+        productRepositoryProvider.overrideWith(
+          (ref) => ProductRepository.forTesting(rpc: emptyRpc),
+        ),
+        analyticsClientProvider.overrideWith(
+          (ref) => AnalyticsClient.forTesting(
+            rpc: emptyRpc,
+            appVersion: 'test',
+            platform: 'test',
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(scanControllerProvider.notifier);
+
+    await notifier.requestPermission(); // scanning
+    await notifier.processBarcode('4006381333931'); // → processing
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.processing,
+    );
+
+    final refreshFuture = notifier.refreshPermission(); // in-flight → 권한 미확인
+    expect(container.read(scanControllerProvider).permissionGranted, isFalse);
+
+    // 재조회 완료 전 결과 화면 닫힘 → stale scanning 없이 안내 화면으로 탈출.
+    notifier.resumeScanning();
+    expect(
+      container.read(scanControllerProvider).status,
+      ScanStatus.permissionDenied,
+    );
+
+    checkCompleter.completeError(Exception('permission check failed'));
+    await expectLater(refreshFuture, throwsA(isA<Exception>()));
+    expect(container.read(scanControllerProvider).permissionGranted, isFalse);
   });
 }

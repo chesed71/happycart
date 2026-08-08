@@ -220,20 +220,16 @@ class ScanController extends Notifier<ScanState> {
     // 결과가 권위이므로 재조회가 이를 무효화하지 않도록.
     if (_pendingRequests > 0) return;
     final generation = ++_permissionGeneration;
-    final checker = ref.read(cameraPermissionCheckerProvider);
-    final PermissionStatus status;
-    try {
-      status = await checker();
-    } on Object {
-      // 조회 실패 시 권한을 미확정으로 간주(fail-closed): permissionGranted 를
-      // 내려 카메라 제어(_syncCamera)가 status 와 무관하게 카메라를 켜지 않도록
-      // 하고(진행 중 resumeScanning 이 stale 로 scanning 을 만든 경우도 방지),
-      // 예외는 호출측 non-fatal 기록을 위해 전파한다.
-      if (generation == _permissionGeneration && state.permissionGranted) {
-        state = state.copyWith(permissionGranted: false);
-      }
-      rethrow;
+    // 재조회 중에는 권한을 "미확인"으로 낮춘다: 조회가 끝나기 전 resumeScanning
+    // 등이 stale 승인값으로 카메라를 시작(일시적 stale start)하지 못하게 한다.
+    // (복귀 중 카메라는 어차피 꺼져 있어 사용자 눈에 띄는 깜빡임은 없다.)
+    // 조회가 실패해도 permissionGranted 는 내려간 채로 남아 fail-closed 이며,
+    // 예외는 호출측 non-fatal 기록을 위해 그대로 전파한다.
+    if (state.permissionGranted) {
+      state = state.copyWith(permissionGranted: false);
     }
+    final checker = ref.read(cameraPermissionCheckerProvider);
+    final status = await checker();
     // 이 조회 이후 더 최신 권한 작업이 시작됐다면 오래된 결과는 폐기한다.
     if (generation != _permissionGeneration) return;
     _applyPermissionResult(status.isGranted);
