@@ -6,6 +6,7 @@
 - 관련 스펙: `2026-06-11-products-table-split-plan.md`(products 분리), `2026-06-11-local-db-data-ingestion-plan.md`(적재 파이프라인), `2026-06-16-datadesk-collected-products-plan.md`(Data Desk 직결)
 - **마이그레이션 번호**: `0014_remove_insufficient_verdict.sql`(verdict를 okay/not_okay 2단계로) + `0015_split_products.sql`(products → masters/barcodes 분리). 분리는 0015.
 - **verdict는 okay / not_okay 2단계** (insufficient 제거됨).
+- **운영 Supabase는 prod `sfnjgzzexshhjlkygnmq`**, 개발은 dev `ftgsnvvskbadegswvjnp`. Play 배포본(production flavor)은 prod 를 본다. Data Desk 도 prod 직결이며, 서비스 테이블 편집은 `save_service_product`(0018, service_role 전용) 로 한다. 이 문서 본문에서 "운영"은 prod 를 가리킨다.
 
 ---
 
@@ -39,7 +40,7 @@
         └───────────────┬───────────────────────▲───────────────┘
                         │ 읽기/쓰기(직접 postgres) │ review RPC (SECURITY DEFINER)
 ═══════════════════════════════════════════════════════════════════════════════
- ③ Data Desk 검수  (review-sveltekit, mac-mini)               [✅ collected 직결]
+ ③ Data Desk 검수  (review-sveltekit, mac-mini)     [✅ collected 직결 + 운영은 prod 직결]
 ═══════════════════════════════════════════════════════════════════════════════
         ┌───────────────┴───────────────────────┴───────────────┐
         │ 원재료 검수 화면: 바코드·원재료 판독 + 확인완료          │
@@ -64,11 +65,11 @@
 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
                         │ ① supabase db push (0014 2-verdict + 0015 분리)  ✅ 적용됨
                         │ ② upload_prod.py (승격분만 upsert, REST/postgres)  PR #8 (main 미반영)
-                        │ ③ 이미지 업로드 → image_url                       (예정)
+                        │ ③ 이미지 업로드 → image_url                       ✅ 완료(699장 prod)
                         │   (Data Desk 등록 로직 수정 불필요 — pending status 전이만 함)
                         ▼
 ═══════════════════════════════════════════════════════════════════════════════
- ⑥ 운영 Supabase (ftgsnvvskbadegswvjnp)              [✅ 분리 적용됨 — masters 50/barcodes 51]
+ ⑥ 운영 Supabase (sfnjgzzexshhjlkygnmq = prod)        [masters 699/barcodes 700, 노출 221]
 ═══════════════════════════════════════════════════════════════════════════════
         product_masters / product_barcodes   ← 이미 운영 카탈로그(50/51, verified)
         Storage (product-images)

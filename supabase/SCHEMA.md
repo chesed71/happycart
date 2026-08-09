@@ -1,7 +1,10 @@
 # HappyCart Supabase DB 스키마
 
-프로젝트: `ftgsnvvskbadegswvjnp` (https://ftgsnvvskbadegswvjnp.supabase.co)
-최종 마이그레이션: `0015_split_products.sql`
+프로젝트: **운영(prod)** `sfnjgzzexshhjlkygnmq` / **개발(dev)** `ftgsnvvskbadegswvjnp`
+최종 마이그레이션: `0018_save_service_product.sql` (dev·prod 모두 적용)
+
+> Play 배포본은 production flavor 로 빌드되므로 **prod** 를 바라본다. dev 는 개발 빌드
+> (`--flavor development`)와 dev 웹 호스팅 전용이다.
 
 > 이 문서는 `supabase/migrations/` 의 누적 결과를 요약한 것이다.
 > 스키마 변경 시 마이그레이션과 함께 이 문서도 갱신할 것.
@@ -182,6 +185,7 @@ PNG 원본은 업로드 전 JPEG 변환 필요. 단, 0015 분리 이후 적재 �
 | 이름 | 대상 | 동작 |
 |------|------|------|
 | `tg_set_updated_at()` | products, pending_products (before update) | `updated_at = now()` |
+| `save_service_product(...)` (0018) | product_masters, product_barcodes | Data Desk 의 서비스 테이블 편집 RPC. master 를 갱신하며 `rule_version='manual'` 로 마킹하고, 바코드는 original 이 있으면 수정·없으면 추가. **service_role 전용** (SECURITY DEFINER + 호출자 검증 없음 → anon 에 절대 열지 말 것) |
 
 ---
 
@@ -204,3 +208,4 @@ PNG 원본은 업로드 전 JPEG 변환 필요. 단, 0015 분리 이후 적재 �
 | 0015 | split_products.sql | products → product_masters + product_barcodes 분리, lookup_product/log_pending_product 재작성, 구 products 쓰기 동결 |
 | 0016 | upload_promoted_product.sql | upload_promoted_product RPC |
 | 0017 | lookup_product_ingredients_raw.sql | lookup_product 반환에 ingredients_raw 추가 (전체 성분표) |
+| 0018 | save_service_product.sql | Data Desk 편집 RPC 를 레포로 승격 + service_role 전용 권한 |
