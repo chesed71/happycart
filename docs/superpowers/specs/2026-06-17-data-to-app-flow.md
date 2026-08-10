@@ -115,9 +115,9 @@
 
 ---
 
-## 적용 상태 (2026-06-17)
+## 적용 상태 (2026-08-10 기준)
 
-**코드(PR)**: 양쪽 머지 완료.
+**코드(PR)**: 양쪽 머지 완료 (2026-06-17 시점 사실).
 - HappyCart: PR #2 `feature/collected-products-pipeline` **머지**. 이후 main에서 insufficient 제거(2-verdict)·마이그레이션 0014/0015 재번호가 추가됨.
 - Data Desk: 원본 PR #1은 closed, 변경은 `fix/datadesk-security-hardening` PR로 **머지**(+ localStorage quota 안전처리 등 하드닝).
 
