@@ -137,23 +137,38 @@ class _SuccessLayoutState extends State<_SuccessLayout>
 
   @override
   Widget build(BuildContext context) {
-    final tier = widget.product.verdict == Verdict.okay
-        ? RiskTier.ok
-        : resolveRiskTier(_riskDisplays);
-    final data = riskTierData[tier]!;
     final isOk = widget.product.verdict == Verdict.okay;
+    // 서버가 보낸 bad 성분 중 앱 카탈로그에 없어 표시 목록에서 빠진(분류 불가)
+    // 성분이 있는지. 있으면 대표 위험도를 보수적으로(최소 medium) 올린다.
+    final resolvedKeys = _riskDisplays.map((d) => d.canonicalKey).toSet();
+    final hasUnclassified = widget.product.badIngredients.any(
+      (key) => !resolvedKeys.contains(key),
+    );
+    final tier = isOk
+        ? RiskTier.ok
+        : resolveRiskTier(_riskDisplays, hasUnclassified: hasUnclassified);
+    final data = riskTierData[tier]!;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       // 라이트 톤 히어로 — status bar 아이콘은 어둡게.
       value: SystemUiOverlayStyle.dark,
       child: Column(
         children: [
-          if (isOk)
-            // 괜찮아요: 성분/설명 없이 합성 이미지를 화면 정중앙에.
-            Expanded(child: _buildHero(data, tier, fullscreen: true))
-          else ...[
-            _buildHero(data, tier, fullscreen: false),
-            Expanded(child: _buildBody(data, tier)),
-          ],
+          // 히어로(+본문)는 스크롤 영역에 두고 푸터(CTA)만 고정한다 — 작은/가로
+          // 화면·큰 글꼴에서도 세로 오버플로 없이 스크롤된다.
+          Expanded(
+            child: isOk
+                // 괜찮아요: 성분/설명 없이 합성 이미지를 화면 정중앙에.
+                ? _buildHero(data, tier, fullscreen: true)
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildHero(data, tier, fullscreen: false),
+                        _buildBody(data, tier, hasUnclassified: hasUnclassified),
+                      ],
+                    ),
+                  ),
+          ),
           _buildFooter(context),
         ],
       ),
@@ -219,6 +234,9 @@ class _SuccessLayoutState extends State<_SuccessLayout>
             : const BorderRadius.vertical(bottom: Radius.circular(30)),
       ),
       child: Column(
+        // 풀스크린(괜찮아요)은 가용 높이를 채워 콘텐츠를 정중앙에 두므로 max,
+        // 그 외(잠깐)는 스크롤 영역 안에서 내용만큼만 차지하도록 min.
+        mainAxisSize: fullscreen ? MainAxisSize.max : MainAxisSize.min,
         children: [
           SizedBox(height: topPad),
           // TopBar (라이트 배경 위 어두운 아이콘)
@@ -247,7 +265,17 @@ class _SuccessLayoutState extends State<_SuccessLayout>
           ),
           // 히어로 콘텐츠
           if (fullscreen)
-            Expanded(child: Center(child: content))
+            // 가용 높이가 충분하면 정중앙, 부족하면(작은/가로 화면) 스크롤.
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                    child: Center(child: content),
+                  ),
+                ),
+              ),
+            )
           else
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 4, 24, 26),
@@ -258,10 +286,15 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     );
   }
 
-  Widget _buildBody(RiskTierData data, RiskTier tier) {
+  Widget _buildBody(
+    RiskTierData data,
+    RiskTier tier, {
+    required bool hasUnclassified,
+  }) {
     final hasBad = _riskDisplays.isNotEmpty;
 
-    return SingleChildScrollView(
+    // 스크롤은 바깥(build)에서 히어로와 함께 처리하므로 여기선 패딩만.
+    return Padding(
       padding: const EdgeInsets.fromLTRB(18, 22, 18, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -269,7 +302,11 @@ class _SuccessLayoutState extends State<_SuccessLayout>
           // 단계별 안내 배너 — 성분 목록보다 먼저 안내를 보고 성분을 확인하는 흐름.
           if (tier != RiskTier.ok) ...[
             RiskNoteBanner(
-              text: data.bannerText!,
+              // 분류 불가 성분이 있으면 tier 기본 안심 문구 대신 중립 문구.
+              // 이유는 unclassifiedBannerText 의 doc comment 참고.
+              text: hasUnclassified && tier != RiskTier.high
+                  ? unclassifiedBannerText
+                  : data.bannerText!,
               bg: data.bannerBg,
               fg: data.bannerFg,
             ),
@@ -282,7 +319,9 @@ class _SuccessLayoutState extends State<_SuccessLayout>
               title: '주의 성분',
               count: _riskDisplays.length,
               hint: '탭하면 이유를 볼 수 있어요',
-              countColor: data.accent,
+              // 흰 텍스트 대비 확보를 위해 밝은 accent 대신 deep 톤(word)을
+              // 배지 배경으로 쓴다(WCAG AA 4.5:1 이상).
+              countColor: data.word,
             ),
             for (int i = 0; i < _riskDisplays.length; i++) ...[
               if (i > 0) const SizedBox(height: 10),

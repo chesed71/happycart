@@ -47,6 +47,28 @@ void main() {
     });
   });
 
+  group('resolveRiskTier 분류 불가 성분(hasUnclassified)', () {
+    test('미분류 있고 남은 성분이 low 면 medium 으로 올린다(과소표시 방지)', () {
+      final displays = [_display('a', RiskLevel.low)];
+      expect(resolveRiskTier(displays, hasUnclassified: true), RiskTier.medium);
+    });
+
+    test('미분류 있어도 남은 성분이 high 면 high 유지', () {
+      final displays = [_display('a', RiskLevel.high)];
+      expect(resolveRiskTier(displays, hasUnclassified: true), RiskTier.high);
+    });
+
+    test('미분류 있어도 남은 성분이 medium 이면 medium 유지', () {
+      final displays = [_display('a', RiskLevel.medium)];
+      expect(resolveRiskTier(displays, hasUnclassified: true), RiskTier.medium);
+    });
+
+    test('미분류 없으면 low 는 low 유지(기본값)', () {
+      final displays = [_display('a', RiskLevel.low)];
+      expect(resolveRiskTier(displays, hasUnclassified: false), RiskTier.low);
+    });
+  });
+
   group('riskTierData', () {
     test('4개 tier 모두를 담는다', () {
       expect(riskTierData.keys.toSet(), RiskTier.values.toSet());

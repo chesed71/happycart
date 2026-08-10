@@ -17,7 +17,16 @@ enum RiskTier { ok, low, medium, high }
 ///
 /// `high` > `medium` > `low` 순. `displays` 가 비어 있거나 `riskLevel` 이
 /// 전부 `null` 이면 방어적으로 [RiskTier.medium] 을 반환한다.
-RiskTier resolveRiskTier(List<rules.IngredientRiskDisplay> displays) {
+///
+/// [hasUnclassified] 는 서버가 보낸 성분 중 앱 카탈로그에 없어 [displays] 에서
+/// 빠진(분류 불가한) 성분이 있는지를 뜻한다. 앱·서버 룰 버전이 어긋나 고위험
+/// 성분이 조용히 탈락하면 남은 성분만으로 계산한 대표 위험도가 실제보다 낮게
+/// 나올 수 있으므로, 분류 불가 성분이 있으면 안심 톤(low)으로는 내려가지 않게
+/// 최소 [RiskTier.medium] 으로 올려 보수적으로 표시한다.
+RiskTier resolveRiskTier(
+  List<rules.IngredientRiskDisplay> displays, {
+  bool hasUnclassified = false,
+}) {
   rules.RiskLevel? highest;
   for (final display in displays) {
     final level = display.riskLevel;
@@ -30,17 +39,32 @@ RiskTier resolveRiskTier(List<rules.IngredientRiskDisplay> displays) {
     }
   }
 
+  final RiskTier tier;
   switch (highest) {
     case rules.RiskLevel.high:
-      return RiskTier.high;
+      tier = RiskTier.high;
     case rules.RiskLevel.medium:
-      return RiskTier.medium;
+      tier = RiskTier.medium;
     case rules.RiskLevel.low:
-      return RiskTier.low;
+      tier = RiskTier.low;
     case null:
-      return RiskTier.medium;
+      tier = RiskTier.medium;
   }
+
+  // 분류 불가 성분이 섞여 있으면 low 로는 과소 표시하지 않는다(최소 medium).
+  if (hasUnclassified && tier == RiskTier.low) {
+    return RiskTier.medium;
+  }
+  return tier;
 }
+
+/// 분류 불가(앱 카탈로그 미등록) 성분이 대표 위험도에 섞여 있을 때의 안내
+/// 배너 문구. tier 기본 문구(예: medium 의 "가끔·적당량이면 괜찮지만")는
+/// 등록된 성분의 위험 성격을 전제로 한 안내라, 위험도를 모르는 성분에
+/// 그대로 쓰면 근거 없는 안심 정보가 된다 — 중립 문구로 대체한다.
+/// (이미 high 면 최고 단계 경고가 유효하므로 대체하지 않는다.)
+const String unclassifiedBannerText =
+    '위험도가 확인되지 않은 성분이 있어요. 정보가 업데이트될 때까지는 되도록 주의해 주세요.';
 
 /// tier 별 색·문구·에셋 데이터.
 class RiskTierData {
