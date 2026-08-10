@@ -45,12 +45,12 @@ app.*.map.json
 /android/app/release
 
 # Env files (anon key는 비밀이 아니지만 환경별로 별도 관리)
-# .env.test은 service_role 키를 담고 있어 절대 커밋 금지 — Flutter asset에도 등록하지 않음
+# service_role 키는 이 디렉터리의 어떤 파일에도 두지 않는다 — 여기 파일은 Flutter
+# asset 으로 APK 에 번들되므로 공개값(anon key)만 담을 것.
 .env
 .env.development
 .env.staging
 .env.production
-.env.test
 # .env.example 은 커밋 가능 (예외)
 !.env.example
 

@@ -40,3 +40,6 @@ scripts/
 
 # superpowers 로컬 plan 문서 (spec 만 추적)
 docs/superpowers/plans/
+
+# Play 출시 진행상황 (Play Console developer/app ID·개인 이메일 포함 — 이 저장소는 public)
+docs/play-store-출시-진행상황.md

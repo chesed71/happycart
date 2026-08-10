@@ -13,7 +13,6 @@ rsync -av --progress \
   "$LOCAL_ROOT/happycart/.env.development" \
   "$LOCAL_ROOT/happycart/.env.staging" \
   "$LOCAL_ROOT/happycart/.env.production" \
-  "$LOCAL_ROOT/happycart/.env.test" \
   "$HOST":"$REMOTE_ROOT/happycart/"
 
 # 견적서
