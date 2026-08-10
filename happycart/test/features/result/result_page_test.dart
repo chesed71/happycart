@@ -849,4 +849,134 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('분류 불가(미등록) 성분 보수적 tier', () {
+    testWidgets('미등록 키 + carrageenan(low) → low 안심 톤이 아니라 medium 으로 격상', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                // future_high_risk 는 앱 카탈로그에 없어 표시 목록에서 제외된다.
+                badIngredients: const ['future_high_risk', 'carrageenan'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      // 남은 성분(carrageenan)만 보면 low 지만, 분류 불가 성분이 있어 medium 격상.
+      expect(find.textContaining('용량 의존형'), findsOneWidget); // medium 배너
+      expect(find.textContaining('낮은 위험'), findsNothing); // low 배너 아님
+      // 등록된 carrageenan 카드만 노출(미등록 키는 목록에서 빠짐).
+      expect(find.byType(FlagCard), findsOneWidget);
+    });
+  });
+
+  group('주의 성분 배지 대비(MED4)', () {
+    testWidgets('배지 배경은 밝은 accent 가 아니라 deep(word) 톤 — 흰 텍스트 대비 확보', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['carrageenan'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      // 카운트 배지: fontSize 13 흰색 '$count' 텍스트로 특정.
+      final badgeText = find.byWidgetPredicate(
+        (w) =>
+            w is Text &&
+            w.data == '1' &&
+            w.style?.fontSize == 13 &&
+            w.style?.color == Colors.white,
+      );
+      expect(badgeText, findsOneWidget);
+      final pill = tester.widget<Container>(
+        find.ancestor(of: badgeText, matching: find.byType(Container)).first,
+      );
+      // low tier 의 deep 톤(lowDeep) — accent(lowMain) 가 아니어야 한다.
+      expect((pill.decoration! as BoxDecoration).color, AppTheme.lowDeep);
+      expect((pill.decoration! as BoxDecoration).color, isNot(AppTheme.lowMain));
+    });
+  });
+
+  group('작은/가로 화면·큰 글꼴 세로 오버플로 견고성(MED2)', () {
+    void setSize(Size size) {
+      final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.physicalSize = size;
+      view.devicePixelRatio = 1.0;
+    }
+
+    tearDown(() {
+      final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.resetPhysicalSize();
+      view.resetDevicePixelRatio();
+    });
+
+    Future<void> pump(
+      WidgetTester tester, {
+      double textScale = 1.0,
+      Verdict verdict = Verdict.notOkay,
+      List<String> bad = const ['hydrogenated'],
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: ResultPage(
+                state: ResultState.success(
+                  _product(
+                    badIngredients: bad,
+                    reasonCodes: const [],
+                    verdict: verdict,
+                  ),
+                ),
+                onRescan: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    testWidgets('작은 세로(320x568) not_okay: 오버플로 없음', (tester) async {
+      setSize(const Size(320, 568));
+      await pump(tester);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('가로(640x360) not_okay: 오버플로 없음', (tester) async {
+      setSize(const Size(640, 360));
+      await pump(tester);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('큰 글꼴(textScale 1.6) not_okay: 오버플로 없음', (tester) async {
+      setSize(const Size(360, 640));
+      await pump(tester, textScale: 1.6);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('가로(640x360) 괜찮아요(okay): 오버플로 없음', (tester) async {
+      setSize(const Size(640, 360));
+      await pump(tester, verdict: Verdict.okay, bad: const []);
+      expect(tester.takeException(), isNull);
+    });
+  });
 }

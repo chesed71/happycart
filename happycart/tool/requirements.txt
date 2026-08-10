@@ -1,0 +1,4 @@
+# happycart/tool/recolor_verdict_marks.py 실행 의존성.
+# 설치: python3 -m pip install -r happycart/tool/requirements.txt
+numpy>=1.24
+Pillow>=10.0
