@@ -9,8 +9,10 @@
 
 실행 의존성(numpy·Pillow)은 `happycart/tool/requirements.txt` 참고.
 기본적으로 기존 산출물이 있으면 덮어쓰지 않고 중단한다(수작업 보정본 보호).
-덮어쓰려면 `--force`. 각 산출물은 임시 파일에 쓴 뒤 검증에 통과해야 원자적으로
-교체하므로, 중간 실패 시 기존 파일이 반쯤 덮이지 않는다.
+덮어쓰려면 `--force`. 산출물 네 개를 전부 생성·검증해 임시 파일로 준비한 뒤에만
+교체를 시작하므로, 생성·검증 실패로는 기존 세트가 부분 갱신되지 않는다.
+(os.replace 는 파일 단위로만 원자적이라 교체 단계 자체가 중단되면 세트가 부분
+갱신될 수 있다 — 이때 남은 .tmp 는 지우지 않고 복구 자료로 남긴다.)
 """
 
 from __future__ import annotations
@@ -112,17 +114,6 @@ def _validate(
         raise ValueError(f"목표색 {target_rgb} 픽셀이 하나도 없음 — 색 치환 실패")
 
 
-def _save_atomic(img: "Image.Image", dest: Path) -> None:
-    """임시 파일에 쓴 뒤 원자적으로 교체한다(부분 기록 방지)."""
-    tmp = dest.with_name(dest.name + ".tmp")
-    try:
-        img.save(tmp)
-        os.replace(tmp, dest)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="위험 마크(빨강)를 low/med 톤으로 리컬러한다.",
@@ -157,11 +148,31 @@ def main() -> None:
 
     from PIL import Image
 
-    for dest, source, recolor, target_rgb, hex_color in plans:
-        source_size = Image.open(source).size
-        result = recolor(source, target_rgb)
-        _validate(result, source_size, target_rgb)
-        _save_atomic(result, dest)
+    # 1단계: 네 산출물을 전부 생성·검증해 임시 파일로 준비한다 — 하나라도
+    # 실패하면 기존 파일을 건드리지 않고 임시 파일만 정리한다.
+    staged: list[tuple[Path, Path, str]] = []
+    try:
+        for dest, source, recolor, target_rgb, hex_color in plans:
+            source_size = Image.open(source).size
+            result = recolor(source, target_rgb)
+            _validate(result, source_size, target_rgb)
+            tmp = dest.with_name(dest.name + ".tmp")
+            # 저장이 반쯤 쓰다 실패(디스크 부족 등)해도 정리 대상이 되도록
+            # 저장 전에 등록한다.
+            staged.append((tmp, dest, hex_color))
+            # Pillow 는 확장자로 포맷을 추론하는데 .tmp 는 미지 확장자라 명시.
+            result.save(tmp, format="PNG")
+    except BaseException:
+        for tmp, _, _ in staged:
+            if tmp.exists():
+                tmp.unlink()
+        raise
+
+    # 2단계: 전부 준비된 뒤에 파일 단위로 교체한다. os.replace 는 파일 하나에만
+    # 원자적이라 이 단계가 도중에 중단되면 세트가 부분 갱신될 수 있다 — 이때는
+    # 남은 .tmp 를 지우지 않고 복구 자료로 남긴다(재실행하면 전체 재생성됨).
+    for tmp, dest, hex_color in staged:
+        os.replace(tmp, dest)
         print(f"생성: {dest} ({hex_color})")
 
 

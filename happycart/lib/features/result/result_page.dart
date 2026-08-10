@@ -164,7 +164,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _buildHero(data, tier, fullscreen: false),
-                        _buildBody(data, tier),
+                        _buildBody(data, tier, hasUnclassified: hasUnclassified),
                       ],
                     ),
                   ),
@@ -286,7 +286,11 @@ class _SuccessLayoutState extends State<_SuccessLayout>
     );
   }
 
-  Widget _buildBody(RiskTierData data, RiskTier tier) {
+  Widget _buildBody(
+    RiskTierData data,
+    RiskTier tier, {
+    required bool hasUnclassified,
+  }) {
     final hasBad = _riskDisplays.isNotEmpty;
 
     // 스크롤은 바깥(build)에서 히어로와 함께 처리하므로 여기선 패딩만.
@@ -298,7 +302,11 @@ class _SuccessLayoutState extends State<_SuccessLayout>
           // 단계별 안내 배너 — 성분 목록보다 먼저 안내를 보고 성분을 확인하는 흐름.
           if (tier != RiskTier.ok) ...[
             RiskNoteBanner(
-              text: data.bannerText!,
+              // 분류 불가 성분이 있으면 tier 기본 안심 문구 대신 중립 문구.
+              // 이유는 unclassifiedBannerText 의 doc comment 참고.
+              text: hasUnclassified && tier != RiskTier.high
+                  ? unclassifiedBannerText
+                  : data.bannerText!,
               bg: data.bannerBg,
               fg: data.bannerFg,
             ),

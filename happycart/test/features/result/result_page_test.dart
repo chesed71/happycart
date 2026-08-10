@@ -4,6 +4,7 @@ import 'package:happycart/app/theme.dart';
 import 'package:happycart/core/disclaimer_card.dart';
 import 'package:happycart/data/models/product_lookup_result.dart';
 import 'package:happycart/features/result/result_page.dart';
+import 'package:happycart/features/result/result_risk_tier.dart';
 import 'package:happycart/features/result/result_state.dart';
 import 'package:happycart_rules/happycart_rules.dart';
 
@@ -851,7 +852,7 @@ void main() {
   });
 
   group('분류 불가(미등록) 성분 보수적 tier', () {
-    testWidgets('미등록 키 + carrageenan(low) → low 안심 톤이 아니라 medium 으로 격상', (
+    testWidgets('미등록 키 + carrageenan(low) → medium 톤 격상 + 중립 배너(안심 문구 아님)', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -869,11 +870,63 @@ void main() {
         ),
       );
 
-      // 남은 성분(carrageenan)만 보면 low 지만, 분류 불가 성분이 있어 medium 격상.
-      expect(find.textContaining('용량 의존형'), findsOneWidget); // medium 배너
+      // 남은 성분(carrageenan)만 보면 low 지만, 분류 불가 성분이 있어 medium
+      // 톤으로 격상된다(에셋으로 확인).
+      expect(cartAssetImage('assets/verdict/cart_med.png'), findsOneWidget);
       expect(find.textContaining('낮은 위험'), findsNothing); // low 배너 아님
+      // 미지 성분의 위험도를 모르는데 "가끔·적당량이면 괜찮다"는 medium 안심
+      // 문구를 그대로 쓰면 근거 없는 안내가 된다 — 중립 문구로 대체돼야 한다.
+      expect(find.textContaining('용량 의존형'), findsNothing);
+      expect(find.text(unclassifiedBannerText), findsOneWidget);
       // 등록된 carrageenan 카드만 노출(미등록 키는 목록에서 빠짐).
       expect(find.byType(FlagCard), findsOneWidget);
+    });
+
+    testWidgets('미등록 키 + sugar(medium) → 톤은 medium 그대로, 배너만 중립 문구', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['future_high_risk', 'sugar'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(cartAssetImage('assets/verdict/cart_med.png'), findsOneWidget);
+      expect(find.textContaining('용량 의존형'), findsNothing);
+      expect(find.text(unclassifiedBannerText), findsOneWidget);
+    });
+
+    testWidgets('미등록 키 + hydrogenated(high) → 이미 최고 단계라 high 배너 유지', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ResultPage(
+            state: ResultState.success(
+              _product(
+                badIngredients: const ['future_high_risk', 'hydrogenated'],
+                reasonCodes: const [],
+              ),
+            ),
+            onRescan: () {},
+          ),
+        ),
+      );
+
+      expect(cartAssetImage('assets/verdict/cart_stop.png'), findsOneWidget);
+      expect(
+        find.text('높은 위험이에요. 안전한 섭취 구간이 없어, 되도록 피하는 걸 권해요.'),
+        findsOneWidget,
+      );
+      expect(find.text(unclassifiedBannerText), findsNothing);
     });
   });
 
