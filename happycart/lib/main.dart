@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app/app.dart';
 import 'app/env.dart';
+import 'core/crash_report_filter.dart';
 import 'firebase_options.dart';
 
 Future<void> main() async {
@@ -28,8 +29,16 @@ Future<void> main() async {
         );
 
         // Flutter framework 에서 발생한 동기 에러를 Crashlytics 로.
-        FlutterError.onError =
-            FirebaseCrashlytics.instance.recordFlutterFatalError;
+        FlutterError.onError = (details) {
+          // EventChannel 정리(cancel) 경합 노이즈는 앱이 죽지 않는데 fatal 로
+          // 기록되면 crash-free 지표를 왜곡한다 — non-fatal 로만 기록한다.
+          // 판별 근거는 crash_report_filter.dart 참고.
+          if (isBenignChannelCleanupError(details)) {
+            FirebaseCrashlytics.instance.recordFlutterError(details);
+            return;
+          }
+          FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+        };
         // Flutter framework 바깥(플랫폼 / native 호출 등) 의 에러도 Crashlytics 로.
         PlatformDispatcher.instance.onError = (error, stack) {
           FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
