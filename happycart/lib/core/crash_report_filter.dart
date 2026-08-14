@@ -12,21 +12,21 @@ import 'package:flutter/services.dart';
 /// crash-free 지표만 왜곡한다. 호출측(main.dart)은 이 경우 non-fatal 로만
 /// 기록한다.
 ///
-/// 판별은 메시지만 보지 않고 엔진 보고 형태(library='services library' +
-/// 'while de-activating platform stream on channel …' 컨텍스트)까지 함께
-/// 확인한다 — 같은 메시지가 다른 경로로 FlutterError 에 도달하는 이례적
-/// 경우까지 non-fatal 로 삼키지 않도록. 반대로 채널명은 특정 플러그인
-/// (mobile_scanner)에 고정하지 않는다: "cancel 도착 시 활성 스트림 없음"은
-/// 어느 EventChannel 이든 같은 의미의 정리 노이즈이기 때문.
+/// 판별은 [FlutterErrorDetails.exception]/[FlutterErrorDetails.library] 같은
+/// 순수 값 필드만 본다 — **[FlutterErrorDetails.context] 문자열은 절대 비교에
+/// 쓰지 않는다.** `context`는 `DiagnosticsNode`(예: `ErrorDescription`)인데,
+/// Flutter SDK 의 `DiagnosticsNode.toString()` 서식 로직 전체가
+/// `assert(() { ... }())` 안에 있어(diagnostics.dart) **release 빌드에서는
+/// assert 가 통째로 스트립돼 원래 메시지 대신 `super.toString()`(예:
+/// 'thrown')로 뭉개진다.** 실제로 v10 프로덕션 이벤트의
+/// `flutter_error_reason` 이 'thrown' 한 단어로만 기록돼 필터가 release 에서
+/// 항상 실패했던 게 이 문제였다(Crashlytics 실측으로 확인). `exception.message`
+/// 와 `library` 는 생성자에 그대로 저장되는 plain String 필드라 release 에서도
+/// 안전하며, 이 조합만으로도 충분히 특정적이다(엔진 소스 확인 — 'No active
+/// stream to cancel' 메시지는 EventChannel cancel 실패 시에만 나온다).
 bool isBenignChannelCleanupError(FlutterErrorDetails details) {
   final exception = details.exception;
-  if (exception is! PlatformException ||
-      exception.message != 'No active stream to cancel') {
-    return false;
-  }
-  return details.library == 'services library' &&
-      (details.context
-              ?.toString()
-              .contains('while de-activating platform stream on channel') ??
-          false);
+  return exception is PlatformException &&
+      exception.message == 'No active stream to cancel' &&
+      details.library == 'services library';
 }

@@ -24,10 +24,26 @@ void main() {
       expect(isBenignChannelCleanupError(details), isTrue);
     });
 
-    test('같은 메시지라도 엔진 EventChannel 보고 형태가 아니면 benign 아님', () {
+    test('context 가 없어도(release 빌드 재현) library+메시지만으로 benign', () {
+      // 회귀 방지 — release 빌드에서는 DiagnosticsNode.toString() 의 실서식
+      // 로직이 assert() 안에 있어 스트립되므로 context 가 실제로는 'thrown'
+      // 처럼 뭉개진 값이 된다(Crashlytics v10 실측: flutter_error_reason=
+      // 'thrown'). 그래서 context 를 판별 조건에서 아예 뺐다 — context 유무와
+      // 무관하게 매칭돼야 release 에서도 필터가 동작한다.
+      final details = FlutterErrorDetails(
+        exception: PlatformException(
+          code: 'error',
+          message: 'No active stream to cancel',
+        ),
+        library: 'services library',
+      );
+
+      expect(isBenignChannelCleanupError(details), isTrue);
+    });
+
+    test('library 가 services library 아니면 benign 아님', () {
       // 앱/플러그인 코드가 우연히 같은 메시지의 PlatformException 을
-      // FlutterError 로 보고하는 경우 — services library 의 de-activation
-      // 컨텍스트가 없으므로 fatal 경로를 유지해야 한다.
+      // FlutterError 로 보고하는 경우까지 삼키지 않도록 library 는 유지한다.
       final details = FlutterErrorDetails(
         exception: PlatformException(
           code: 'error',
@@ -39,41 +55,10 @@ void main() {
       expect(isBenignChannelCleanupError(details), isFalse);
     });
 
-    test('services library 라도 de-activation 컨텍스트가 없으면 benign 아님', () {
-      // context 조건이 조건 완화로 삭제되는 회귀를 잡는다 — widgets library
-      // 테스트는 library 조건만으로도 걸러져 context 조건을 고정하지 못한다.
-      final details = FlutterErrorDetails(
-        exception: PlatformException(
-          code: 'error',
-          message: 'No active stream to cancel',
-        ),
-        library: 'services library',
-      );
-
-      expect(isBenignChannelCleanupError(details), isFalse);
-    });
-
-    test('엔진 보고 형태면 채널이 mobile_scanner 가 아니어도 benign (의도적)', () {
-      // "cancel 도착 시 활성 스트림 없음"은 어느 EventChannel 이든 같은 의미의
-      // 정리 노이즈다 — 특정 플러그인 채널명에 고정하지 않는다.
-      final details = FlutterErrorDetails(
-        exception: PlatformException(
-          code: 'error',
-          message: 'No active stream to cancel',
-        ),
-        library: 'services library',
-        context: ErrorDescription(
-          'while de-activating platform stream on channel '
-          'some.other.plugin/events',
-        ),
-      );
-
-      expect(isBenignChannelCleanupError(details), isTrue);
-    });
-
     test('다른 메시지의 PlatformException 은 benign 아님', () {
       final details = FlutterErrorDetails(
         exception: PlatformException(code: 'error', message: 'Camera in use'),
+        library: 'services library',
       );
 
       expect(isBenignChannelCleanupError(details), isFalse);
@@ -82,6 +67,7 @@ void main() {
     test('PlatformException 이 아닌 예외는 benign 아님', () {
       final details = FlutterErrorDetails(
         exception: StateError('No active stream to cancel'),
+        library: 'services library',
       );
 
       expect(isBenignChannelCleanupError(details), isFalse);
