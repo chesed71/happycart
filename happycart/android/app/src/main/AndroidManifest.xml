@@ -1,5 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- CAMERA 권한만 선언하면 android.hardware.camera 와
+         android.hardware.camera.autofocus 가 필수 기능으로 자동 추론돼
+         자동초점이 없는 기기가 Play 스토어에서 걸러진다. 바코드 스캔은
+         자동초점 없이도 가능하므로 명시적으로 선언해 필터를 넓힌다. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="true"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
     <application
         android:label="해피카트"
         android:name="${applicationName}"
