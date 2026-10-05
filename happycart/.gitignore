@@ -68,3 +68,7 @@ android/fastlane/test_output
 # Firebase Hosting 배포 캐시.
 .firebase/
 
+ios/fastlane/report.xml
+ios/fastlane/Preview.html
+ios/fastlane/README.md
+ios/fastlane/test_output

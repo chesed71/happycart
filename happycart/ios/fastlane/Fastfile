@@ -1,0 +1,48 @@
+default_platform(:ios)
+
+# Flutter 프로젝트 루트(happycart/) — 이 Fastfile 은 ios/fastlane 에 있으므로 두 단계 위.
+FLUTTER_ROOT = File.expand_path("../..", __dir__)
+IPA_PATH = File.join(FLUTTER_ROOT, "build/ios/ipa/happycart.ipa")
+
+# App Store Connect API 키 (.p8). 비밀 파일이므로 repo 밖(~/.config/happycart/)에 두고
+# 절대 커밋하지 않는다. 환경변수 HAPPYCART_ASC_KEY 로 경로를 덮어쓸 수 있다(CI 등).
+ASC_KEY_ID = "J75FS292M3"
+ASC_ISSUER_ID = "19f4f884-4817-4783-8444-adfcef85f1a4"
+ASC_KEY_PATH =
+  ENV["HAPPYCART_ASC_KEY"] ||
+  File.expand_path("~/.config/happycart/AuthKey_#{ASC_KEY_ID}.p8")
+
+# production flavor ipa 를 빌드한다. flavor 는 --flavor 와 --dart-define 둘 다 필요.
+# 서명은 Xcode 자동 서명(클라우드 관리 Apple Distribution 인증서)에 맡긴다.
+# fastlane(Homebrew Ruby)의 GEM_* 환경변수가 상속되면 flutter 가 호출하는
+# CocoaPods 가 깨지므로(“CocoaPods is installed but broken”) env 로 걷어내고 실행한다.
+def build_production_ipa
+  Dir.chdir(FLUTTER_ROOT) do
+    sh("env", "-u", "GEM_HOME", "-u", "GEM_PATH", "-u", "RUBYLIB", "-u", "RUBYOPT",
+       "-u", "BUNDLE_GEMFILE", "-u", "BUNDLE_BIN_PATH", "-u", "BUNDLER_VERSION",
+       "flutter", "build", "ipa",
+       "--flavor", "production",
+       "--dart-define=FLAVOR=production")
+  end
+end
+
+def asc_api_key
+  app_store_connect_api_key(
+    key_id: ASC_KEY_ID,
+    issuer_id: ASC_ISSUER_ID,
+    key_filepath: ASC_KEY_PATH,
+  )
+end
+
+platform :ios do
+  desc "production ipa 빌드 후 TestFlight 에 업로드"
+  lane :beta do
+    build_production_ipa
+    upload_to_testflight(
+      api_key: asc_api_key,
+      ipa: IPA_PATH,
+      # 업로드만 하고 처리 완료를 기다리지 않는다(처리는 App Store Connect 가 수분 내 수행).
+      skip_waiting_for_build_processing: true,
+    )
+  end
+end
