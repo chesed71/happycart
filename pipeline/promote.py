@@ -94,6 +94,7 @@ CANDIDATE_SELECT = """
       and confidence is distinct from 'low'
       and review_decision = 'verified'   -- 확인완료 게이트 (§8-1 확정)
       and (raw->>'merged_into') is null  -- 머지 자식은 부모를 통해서만 승격(중복 후보→stage 오염 방지)
+      and coalesce(raw->>'review_tag', '') <> 'flagged'  -- 검토 필요(검수자 플래그)는 승격 제외
     order by source, source_ref
     for update   -- 후보 행을 트랜잭션 동안 잠가 review RPC와의 경쟁 차단
 """
