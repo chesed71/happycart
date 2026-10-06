@@ -337,11 +337,16 @@ class _Header extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _GlassButton(
-            icon: Icons.close,
-            onPressed: onClose,
-            tooltip: '닫기',
-          ),
+          // 앱 종료(SystemNavigator.pop)는 Android 에서만 동작한다. iOS 는 앱이
+          // 스스로 종료할 수 없고 Apple HIG 도 종료 버튼을 금지하므로 숨긴다.
+          if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+            _GlassButton(
+              icon: Icons.close,
+              onPressed: onClose,
+              tooltip: '닫기',
+            )
+          else
+            const SizedBox.shrink(),
           _GlassButton(
             icon: torchOn ? Icons.flash_on : Icons.flash_off,
             onPressed: onToggleTorch,
