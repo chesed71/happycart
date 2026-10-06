@@ -3,7 +3,11 @@
 소스 병합:
   - <카테고리>/products*.json : productId, title, barcode(koreannet), image
   - <카테고리>/manual_ingredients_direct*.json : 육안 판독 원재료 (confidence 보유, 우선)
-  - extracted_data/*.json : {productId: 원재료 원문} (confidence 없음)
+  - extracted_data/ingredients_*.json : {productId: 원재료 원문} (confidence 없음)
+
+output/ 은 롯데마트제타 크롤러와 공유된다 — 그쪽 산출물은 아래 두 곳에서 걸러낸다:
+  - <카테고리>/products*.json 에 zettaSku 가 있는 폴더 (적재는 자체 SQL 경로)
+  - extracted_data/ 의 분석·리포트 JSON (ingredients_*.json 규칙으로 선별)
 
 사용: .venv/bin/python extract_coupang.py [--dsn DSN] [--dry-run]
 참고: docs/superpowers/specs/2026-06-11-local-db-data-ingestion-plan.md §4.1
@@ -15,9 +19,17 @@ import glob
 import json
 import os
 import re
+import unicodedata
 from collections import Counter
 
 from common import COUPANG_OUTPUT, COUNT_RE, SIZE_RE, connect, ean_valid, upsert_parsed
+
+
+def nfc_category(folder_name: str | None) -> str | None:
+    """category 컬럼용 NFC 정규화. macOS 파일시스템은 디렉터리명을 NFD로 돌려주므로
+    그대로 넣으면 눈에 같은 카테고리가 NFC/NFD 두 값으로 쪼개진다(2026-10-06 운영 중복).
+    raw.category_folder는 prepare_images가 파일 경로 조립에 쓰므로 원값을 유지한다."""
+    return unicodedata.normalize("NFC", folder_name) if folder_name else folder_name
 
 
 def parse_title(title: str):
@@ -68,6 +80,15 @@ def load_products(folder: str) -> dict:
     return merged
 
 
+def is_lottemartzetta_folder(products: dict) -> bool:
+    """롯데마트제타 크롤러가 쓴 카테고리 폴더인지. 그 상품 행은 zettaSku 를 갖는다.
+
+    롯데마트제타는 crawl_lottemart_zetta.py 가 만드는 적재 SQL로 collected_products 에
+    source='lottemartzetta' 로 들어간다 — 쿠팡 추출에서 가져가면 출처가 뒤바뀐다.
+    """
+    return bool(products) and all("zettaSku" in e["product"] for e in products.values())
+
+
 def load_manual_ingredients(folder: str) -> dict:
     """manual_ingredients_direct*.json items → {productId: item}. 중복 시 뒤 파일 우선."""
     out = {}
@@ -85,10 +106,15 @@ _PLACEHOLDER_RE = re.compile(r"^not found", re.IGNORECASE)
 
 
 def load_extracted(output_root: str) -> dict:
+    """extracted_data/ingredients_*.json → {productId: 원재료 원문}.
+
+    extracted_data/ 에는 과거 세션의 분석·리포트 JSON과 롯데마트제타 적재 SQL도 쌓여 있다.
+    파일명 규칙으로 원재료 파일만 고르고, 그래도 섞인 비문자열 값은 건너뛴다.
+    """
     out = {}
-    for f in sorted(glob.glob(os.path.join(output_root, "extracted_data", "*.json"))):
+    for f in sorted(glob.glob(os.path.join(output_root, "extracted_data", "ingredients_*.json"))):
         for pid, raw in json.load(open(f)).items():
-            if not raw or _PLACEHOLDER_RE.match(raw.strip()):
+            if not isinstance(raw, str) or not raw or _PLACEHOLDER_RE.match(raw.strip()):
                 continue
             out[str(pid)] = {"ingredients": raw, "_file": os.path.basename(f)}
     return out
@@ -105,15 +131,25 @@ def main():
     stats = Counter()
     by_pid = {}  # 같은 상품이 여러 카테고리 폴더에 등장할 수 있다 — 명시적으로 병합
 
-    folders = sorted(
+    candidates = sorted(
         d for d in os.listdir(args.output_root)
         if os.path.isdir(os.path.join(args.output_root, d)) and d != "extracted_data"
         and glob.glob(os.path.join(args.output_root, d, "products*.json"))
     )
+    # output/ 은 롯데마트제타 크롤러와 공유된다 — 그쪽 카테고리 폴더는 여기서 뺀다.
+    products_by_folder = {}
+    for folder_name in candidates:
+        products = load_products(os.path.join(args.output_root, folder_name))
+        if is_lottemartzetta_folder(products):
+            stats["skipped_folder_lottemartzetta"] += 1
+            continue
+        products_by_folder[folder_name] = products
+    folders = list(products_by_folder)
+
     for folder_name in folders:
         folder = os.path.join(args.output_root, folder_name)
         manual = load_manual_ingredients(folder)
-        for pid, entry in load_products(folder).items():
+        for pid, entry in products_by_folder[folder_name].items():
             p = entry["product"]
             brand, name, size = parse_title(p.get("title") or "")
 
@@ -163,7 +199,7 @@ def main():
                 "brand": brand,
                 "name": name,
                 "size": size,
-                "category": folder_name,
+                "category": nfc_category(folder_name),
                 "barcode": barcode,
                 "ingredients_raw": ingredients_raw,
                 "confidence": confidence,
@@ -211,7 +247,7 @@ def main():
             "brand": None,
             "name": None,
             "size": None,
-            "category": detail_folder.get(pid),
+            "category": nfc_category(detail_folder.get(pid)),
             "barcode": None,
             "ingredients_raw": ing["ingredients"],
             "confidence": None,
