@@ -5,8 +5,9 @@
   - <카테고리>/manual_ingredients_direct*.json : 육안 판독 원재료 (confidence 보유, 우선)
   - extracted_data/ingredients_*.json : {productId: 원재료 원문} (confidence 없음)
 
-output/ 은 롯데마트제타 크롤러와 공유된다 — 그쪽 산출물은 아래 두 곳에서 걸러낸다:
-  - <카테고리>/products*.json 에 zettaSku 가 있는 폴더 (적재는 자체 SQL 경로)
+output/ 은 롯데마트제타 크롤러와 공유된다 — 그쪽 산출물은 아래 세 곳에서 걸러낸다:
+  - <카테고리>/products*.json 의 zettaSku 보유 행 (적재는 자체 SQL 경로)
+  - <카테고리>/manual_ingredients_direct*.json 중 쿠팡 형식(dict)이 아닌 파일
   - extracted_data/ 의 분석·리포트 JSON (ingredients_*.json 규칙으로 선별)
 
 사용: .venv/bin/python extract_coupang.py [--dsn DSN] [--dry-run]
@@ -74,26 +75,44 @@ def load_products(folder: str) -> dict:
                 merged[pid] = {"product": p, "pages": [page]}
             else:
                 merged[pid]["pages"].append(page)
+                # 같은 pid 가 여러 페이지에 있을 때 한쪽에만 zettaSku 가 있으면 출처 판정이
+                # 파일 정렬 순서에 좌우된다 — 마커가 보이면 대표 객체로 올려 제외 쪽으로 고정.
+                if "zettaSku" in p and "zettaSku" not in merged[pid]["product"]:
+                    merged[pid]["product"]["zettaSku"] = p["zettaSku"]
                 # 바코드는 어느 페이지든 있으면 채택 (koreannet 작업이 페이지 단위로 진행됨)
                 if not merged[pid]["product"].get("barcode") and p.get("barcode"):
                     merged[pid]["product"]["barcode"] = p["barcode"]
     return merged
 
 
-def is_lottemartzetta_folder(products: dict) -> bool:
-    """롯데마트제타 크롤러가 쓴 카테고리 폴더인지. 그 상품 행은 zettaSku 를 갖는다.
+def split_zetta_rows(products: dict) -> tuple[dict, set]:
+    """load_products 결과를 (쿠팡 행, 제외한 롯데마트제타 productId 집합) 로 가른다.
 
-    롯데마트제타는 crawl_lottemart_zetta.py 가 만드는 적재 SQL로 collected_products 에
-    source='lottemartzetta' 로 들어간다 — 쿠팡 추출에서 가져가면 출처가 뒤바뀐다.
+    롯데마트제타 상품 행은 zettaSku 를 갖는다. 그쪽은 crawl_lottemart_zetta.py 가 만드는
+    적재 SQL로 collected_products 에 source='lottemartzetta' 로 들어가므로, 쿠팡 추출이
+    가져가면 출처가 뒤바뀐다.
+
+    폴더 단위로 판정하면(all) 한 행만 zettaSku 가 빠져도 폴더 전체가 쿠팡 경로로 넘어온다 —
+    1천 행대 폴더가 통째로 오염되는 fail-open 이라 행 단위로 가른다. 쿠팡 행은 그대로 남으니
+    혼재 폴더에서도 상품이 유실되지 않는다.
     """
-    return bool(products) and all("zettaSku" in e["product"] for e in products.values())
+    coupang = {pid: e for pid, e in products.items() if "zettaSku" not in e["product"]}
+    return coupang, set(products) - set(coupang)
 
 
-def load_manual_ingredients(folder: str) -> dict:
-    """manual_ingredients_direct*.json items → {productId: item}. 중복 시 뒤 파일 우선."""
+def load_manual_ingredients(folder: str, stats: Counter | None = None) -> dict:
+    """manual_ingredients_direct*.json items → {productId: item}. 중복 시 뒤 파일 우선.
+
+    롯데마트제타 크롤러가 같은 이름으로 최상위 list 를 쓴다(쿠팡은 {"items": [...]}).
+    형식이 다른 파일은 세어서 건너뛴다 — 받아주면 다른 출처의 원재료를 조용히 먹는다.
+    """
     out = {}
     for f in sorted(glob.glob(os.path.join(folder, "manual_ingredients_direct*.json"))):
         data = json.load(open(f))
+        if not isinstance(data, dict):
+            if stats is not None:
+                stats["skipped_manual_not_coupang_shape"] += 1
+            continue
         for item in data.get("items", []):
             pid = item.get("productId")
             if pid:
@@ -120,35 +139,33 @@ def load_extracted(output_root: str) -> dict:
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dsn", default=None)
-    ap.add_argument("--output-root", default=COUPANG_OUTPUT)
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-
-    extracted = load_extracted(args.output_root)
+def build_rows(output_root: str) -> tuple[list[dict], Counter, list[str]]:
+    """output_root 를 훑어 upsert 할 행 목록을 만든다. DB 접근 없음(테스트에서 직접 호출)."""
+    extracted = load_extracted(output_root)
     stats = Counter()
     by_pid = {}  # 같은 상품이 여러 카테고리 폴더에 등장할 수 있다 — 명시적으로 병합
 
     candidates = sorted(
-        d for d in os.listdir(args.output_root)
-        if os.path.isdir(os.path.join(args.output_root, d)) and d != "extracted_data"
-        and glob.glob(os.path.join(args.output_root, d, "products*.json"))
+        d for d in os.listdir(output_root)
+        if os.path.isdir(os.path.join(output_root, d)) and d != "extracted_data"
+        and glob.glob(os.path.join(output_root, d, "products*.json"))
     )
-    # output/ 은 롯데마트제타 크롤러와 공유된다 — 그쪽 카테고리 폴더는 여기서 뺀다.
+    # output/ 은 롯데마트제타 크롤러와 공유된다 — 그쪽 상품 행은 여기서 뺀다.
     products_by_folder = {}
+    zetta_pids: set[str] = set()  # 아래 고아 원재료 행에서도 막아야 한다
     for folder_name in candidates:
-        products = load_products(os.path.join(args.output_root, folder_name))
-        if is_lottemartzetta_folder(products):
+        products, skipped = split_zetta_rows(load_products(os.path.join(output_root, folder_name)))
+        zetta_pids |= skipped
+        stats["skipped_row_lottemartzetta"] += len(skipped)
+        if not products:
             stats["skipped_folder_lottemartzetta"] += 1
             continue
         products_by_folder[folder_name] = products
     folders = list(products_by_folder)
 
     for folder_name in folders:
-        folder = os.path.join(args.output_root, folder_name)
-        manual = load_manual_ingredients(folder)
+        folder = os.path.join(output_root, folder_name)
+        manual = load_manual_ingredients(folder, stats)
         for pid, entry in products_by_folder[folder_name].items():
             p = entry["product"]
             brand, name, size = parse_title(p.get("title") or "")
@@ -226,12 +243,16 @@ def main():
     listed = set(by_pid)
     detail_folder = {}
     for folder_name in folders:
-        dd = os.path.join(args.output_root, folder_name, "detail")
+        dd = os.path.join(output_root, folder_name, "detail")
         if os.path.isdir(dd):
             for pid in os.listdir(dd):
                 detail_folder.setdefault(pid, folder_name)
     for pid, ing in extracted.items():
         if pid in listed or not (ing.get("ingredients") or "").strip():
+            continue
+        # 목록에서 뺀 롯데마트제타 상품이 여기로 되살아나면 출처 필터를 우회한다.
+        if pid in zetta_pids:
+            stats["skipped_orphan_lottemartzetta"] += 1
             continue
         rows.append({
             "source": "coupang",
@@ -255,6 +276,17 @@ def main():
         stats["rows"] += 1
         stats["orphan_ingredients"] += 1
 
+    return rows, stats, folders
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dsn", default=None)
+    ap.add_argument("--output-root", default=COUPANG_OUTPUT)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    rows, stats, folders = build_rows(args.output_root)
     print(f"folders={len(folders)} {dict(stats)}")
     if args.dry_run:
         return
