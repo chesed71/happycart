@@ -85,7 +85,7 @@ def _manual_upload(source: str, source_ref: str, barcode: str | None) -> str | N
 def _find_source_image(source: str, source_ref: str, raw: dict, image_path: str | None = None) -> str | None:
     """우선순위대로 로컬 소스 이미지 경로를 찾는다 (없으면 None)."""
     pid = str(source_ref)
-    if source == "coupang":
+    if source == "cp":
         # 서비스 대표 이미지 = 상품 목록 대표 이미지(CDN 썸네일, 데스크에 보이는 그 이미지).
         # detail 스캔은 서비스 등록에 불필요하므로 CDN 을 우선한다.
         product = raw.get("product") or {}
@@ -108,14 +108,14 @@ def _find_source_image(source: str, source_ref: str, raw: dict, image_path: str 
             detail = sorted(glob.glob(os.path.join(base, "detail", pid, "*.jpg")))
             if detail:
                 return detail[0]
-    elif source == "kakamuka":
+    elif source == "kk":
         detail = sorted(glob.glob(os.path.join(KAKAMUKA_ROOT, "**", "detail", pid, "*.jpg"),
                                   recursive=True))
         if detail:
             return detail[0]
-    elif source == "lottemartzetta":
+    elif source == "lz":
         product = raw.get("product") or {}
-        zetta = raw.get("lottemartzetta") or {}
+        zetta = raw.get("lz") or {}
         for path in (product.get("image_path"), zetta.get("productImagePath"), image_path):
             found = _existing_image(path)
             if found:
@@ -193,7 +193,7 @@ def main():
             # 출처 기록용 CDN URL (벤더 썸네일). 로컬 변환 파일이 detail/Koreannet 이라도
             # 가용한 원본 URL 로 provenance 를 남긴다.
             product = raw.get("product") or {}
-            zetta = raw.get("lottemartzetta") or {}
+            zetta = raw.get("lz") or {}
             cdn_url = (
                 _http_url(product.get("image_url"))
                 or _http_url(product.get("source_image_url"))
@@ -227,7 +227,7 @@ def main():
             stored_image_path = out_path
             if manual:
                 stored_image_path = os.path.relpath(manual, COUPANG_OUTPUT)
-            elif source == "lottemartzetta":
+            elif source == "lz":
                 stored_image_path = (
                     product.get("image_path")
                     or zetta.get("productImagePath")

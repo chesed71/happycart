@@ -104,7 +104,7 @@ def test_fetch_corpus_shape():
               (source, source_ref, raw, brand, name, size, category, barcode,
                ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
                bad_ingredients_detected, verdict_reason_codes, computed_at, stage)
-            values ('coupang', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s,
+            values ('cp', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s,
                     '밀가루, 적색40호', 'high', '{밀가루,적색40호}',
                     'not_okay'::verdict_enum, 'v1.1.0',
                     '{red_40}', '{artificial_color}', now(), 'judged')
@@ -120,7 +120,7 @@ def test_fetch_corpus_shape():
               (source, source_ref, raw, brand, name, size, category, barcode,
                ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
                computed_at, stage)
-            values ('coupang', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s,
+            values ('cp', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s,
                     '', 'high', '{}', 'okay'::verdict_enum, 'v1.1.0', now(), 'judged')
             returning id
             """,

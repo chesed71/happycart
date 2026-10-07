@@ -8,7 +8,7 @@
 create table if not exists public.collected_products (
   -- 식별
   id uuid primary key default gen_random_uuid(),
-  source text not null check (source in ('coupang', 'kakamuka')),
+  source text not null check (source in ('cp', 'kk', 'lz')),
   source_ref text not null,
 
   -- 원본: 적재 시점의 소스 레코드 병합 스냅샷 (디버깅·재파싱용 — 조회 1차 소스 아님)

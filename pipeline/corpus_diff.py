@@ -26,7 +26,7 @@ from common import connect
 from judge import resolve_app_dir, run_rules
 
 # judge.py 와 동일 상수 — review-gated source 는 verified 행만 판정 대상.
-REVIEW_GATED_SOURCES = {"lottemartzetta"}
+REVIEW_GATED_SOURCES = {"lz"}
 
 
 def fetch_corpus(conn, review_gated=REVIEW_GATED_SOURCES) -> list[dict]:

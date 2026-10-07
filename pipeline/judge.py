@@ -23,7 +23,7 @@ from common import connect
 HAPPYCART_APP_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "happycart")
 )
-REVIEW_GATED_SOURCES = {"lottemartzetta"}
+REVIEW_GATED_SOURCES = {"lz"}
 
 
 def resolve_app_dir(cli_value: str | None) -> str:

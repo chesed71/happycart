@@ -15,8 +15,10 @@ import tempfile
 
 import psycopg
 
+import inspect
+
+import promote
 from common import dsn
-from promote import SOURCE_BY_COLLECTED
 from upload_prod import classify_dryrun, writeback_attachments
 
 results = []
@@ -161,8 +163,15 @@ def test_dryrun_classify():
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
 
 
-def test_lottemartzetta_source_support():
-    check("Lottemart Zetta 승격 source 매핑", "lottemartzetta" in SOURCE_BY_COLLECTED)
+def test_master_source_is_collected_source():
+    """승격은 product_masters.source 에 collected_products.source 를 그대로 넣는다.
+
+    예전에는 사람이 읽는 문구로 매핑했으나(SOURCE_BY_COLLECTED) 2026-10-07 운영까지 약어로
+    통일해 항등이 됐다. 다시 문구 매핑이 끼면 운영 값 어휘가 갈라지므로 고정한다.
+    """
+    src = inspect.getsource(promote.run_promotion)
+    check("master insert 에 rep[1](collected source) 을 넣는다", "rep[1], rep[17]))" in src)
+    check("문구 매핑 상수가 되살아나지 않았다", not hasattr(promote, "SOURCE_BY_COLLECTED"))
 
 
 def test_lottemartzetta_image_lookup():
@@ -178,9 +187,9 @@ def test_lottemartzetta_image_lookup():
             with open(path, "wb") as fh:
                 fh.write(b"png")
             got = prepare_images._find_source_image(
-                "lottemartzetta",
+                "lz",
                 "8803143116452",
-                {"product": {}, "lottemartzetta": {}},
+                {"product": {}, "lz": {}},
                 rel,
             )
             check("Lottemart Zetta 대표 이미지 lookup", got == path, str(got))
@@ -191,9 +200,9 @@ def test_lottemartzetta_image_lookup():
             with open(jpg_path, "wb") as fh:
                 fh.write(b"jpg")
             got = prepare_images._find_source_image(
-                "lottemartzetta",
+                "lz",
                 "8803143116452",
-                {"product": {"image_path": rel}, "lottemartzetta": {}},
+                {"product": {"image_path": rel}, "lz": {}},
                 jpg_rel,
             )
             check("Lottemart Zetta raw PNG 우선", got == path, str(got))
@@ -216,12 +225,12 @@ def test_writeback_row_scoped():
         # 같은 barcode B1을 가진 promoted 행 2개 (서로 다른 promoted_master_id)
         cur.execute("""insert into collected_products
             (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
-            values ('coupang','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s)
+            values ('cp','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s)
             returning id""", (B1, ma))
         row_a = cur.fetchone()[0]
         cur.execute("""insert into collected_products
             (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
-            values ('coupang','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s)
+            values ('cp','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s)
             returning id""", (B1, mb))
         row_b = cur.fetchone()[0]
         # row_a만 붙은 것으로 writeback
@@ -236,7 +245,7 @@ def test_writeback_row_scoped():
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
-              test_lottemartzetta_source_support, test_lottemartzetta_image_lookup,
+              test_master_source_is_collected_source, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:
             t()

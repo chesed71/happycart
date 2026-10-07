@@ -202,7 +202,7 @@ def build_rows(output_root: str) -> tuple[list[dict], Counter, list[str]]:
                 stats["title_parse_partial"] += 1
 
             row = {
-                "source": "coupang",
+                "source": "cp",
                 "source_ref": pid,
                 "raw": {
                     "category_folder": folder_name,
@@ -255,7 +255,7 @@ def build_rows(output_root: str) -> tuple[list[dict], Counter, list[str]]:
             stats["skipped_orphan_lottemartzetta"] += 1
             continue
         rows.append({
-            "source": "coupang",
+            "source": "cp",
             "source_ref": pid,
             "raw": {
                 "category_folder": detail_folder.get(pid),
@@ -293,7 +293,7 @@ def main():
     with connect(args.dsn) as conn:
         upsert_parsed(conn, rows)
         with conn.cursor() as cur:
-            cur.execute("select count(*) from collected_products where source='coupang'")
+            cur.execute("select count(*) from collected_products where source='cp'")
             print(f"collected_products(coupang) = {cur.fetchone()[0]}")
 
 

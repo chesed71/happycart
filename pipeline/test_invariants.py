@@ -50,7 +50,7 @@ def _fixture(cur, *, stage="judged", barcode="8801037088168", ingredients="밀�
           (source, source_ref, raw, brand, name, size, category, barcode,
            ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
            computed_at, stage, review_decision)
-        values ('coupang', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s, %s, %s,
+        values ('cp', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s, %s, %s,
                 '{밀가루,설탕}', %s::verdict_enum, 'v1.1.0', now(), %s, %s)
         returning id
         """,
@@ -84,7 +84,7 @@ def _merged_child(cur, parent, barcode, *, stage="parsed", review_decision="need
            ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
            computed_at, stage, review_decision,
            bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes)
-        values ('coupang', %s, jsonb_build_object('merged_into', %s::text),
+        values ('cp', %s, jsonb_build_object('merged_into', %s::text),
                 'B', 'N-child', '20g', 'cat', %s, '밀가루, 설탕', %s,
                 '{밀가루,설탕}', 'not_okay'::verdict_enum, 'v1.1.0', now(),
                 %s, %s, '{}', '{}', '{}')
@@ -582,7 +582,7 @@ def test_upsert_preserves_desk_raw_keys():
             insert into collected_products
               (source, source_ref, raw, brand, name, size, category, barcode,
                ingredients_raw, confidence, stage)
-            values ('coupang', 'test-raw-keep', jsonb_build_object(
+            values ('cp', 'test-raw-keep', jsonb_build_object(
                       'review_tag', 'flagged', 'merged_into', '00000000-0000-0000-0000-000000000001',
                       'merged_barcodes', jsonb_build_array('8801037088168'),
                       -- 판독불가 초안은 text·confidence 가 null 이다. jsonb_strip_nulls 로
@@ -598,7 +598,7 @@ def test_upsert_preserves_desk_raw_keys():
         )
         rid = cur.fetchone()[0]
         upsert_parsed(conn, [{
-            "source": "coupang", "source_ref": "test-raw-keep",
+            "source": "cp", "source_ref": "test-raw-keep",
             "raw": {"category_folder": "새폴더", "product": {"title": "t"}},
             "brand": "B2", "name": "N2", "size": "20g", "category": "cat2",
             "barcode": None, "ingredients_raw": None, "confidence": None,
@@ -629,10 +629,10 @@ def test_upsert_preserves_desk_raw_keys():
         cur.execute(
             """insert into collected_products
                  (source, source_ref, raw, brand, name, size, category, stage)
-               values ('coupang', 'test-raw-fresh', '{}'::jsonb, 'B', 'N', '1g', 'c', 'parsed')"""
+               values ('cp', 'test-raw-fresh', '{}'::jsonb, 'B', 'N', '1g', 'c', 'parsed')"""
         )
         upsert_parsed(conn, [{
-            "source": "coupang", "source_ref": "test-raw-fresh",
+            "source": "cp", "source_ref": "test-raw-fresh",
             "raw": {"category_folder": "f", "product": None},
             "brand": "B", "name": "N", "size": "1g", "category": "c",
             "barcode": None, "ingredients_raw": None, "confidence": None,
@@ -684,7 +684,7 @@ def test_merged_child_promotes_with_parent():
               (source, source_ref, raw, brand, name, size, category, barcode,
                ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
                computed_at, stage, review_decision)
-            values ('coupang', %s, jsonb_build_object('merged_into', %s::text),
+            values ('cp', %s, jsonb_build_object('merged_into', %s::text),
                     'B', 'N-child', '20g', 'cat', %s, '밀가루, 설탕', 'high',
                     '{밀가루,설탕}', 'not_okay'::verdict_enum, 'v1.1.0', now(),
                     'parsed', 'needs_fix')

@@ -43,7 +43,7 @@ def main():
         cur.execute("""
             update collected_products c set matched_ref = k.source || ':' || k.source_ref
             from collected_products k
-            where c.source = 'coupang' and k.source = 'kakamuka'
+            where c.source = 'cp' and k.source = 'kk'
               and c.barcode is not null and c.barcode = k.barcode
               and c.matched_ref is null
         """)
@@ -51,7 +51,7 @@ def main():
         cur.execute("""
             update collected_products k set matched_ref = c.source || ':' || c.source_ref
             from collected_products c
-            where k.source = 'kakamuka' and c.source = 'coupang'
+            where k.source = 'kk' and c.source = 'cp'
               and k.barcode is not null and k.barcode = c.barcode
               and k.matched_ref is null
         """)
@@ -60,14 +60,14 @@ def main():
         # ── B. 이름 매칭으로 바코드 보강 (보수적) ────────────────────────────
         cur.execute("""
             select id, brand, name, size from collected_products
-            where source = 'coupang' and barcode is null
+            where source = 'cp' and barcode is null
               and brand is not null and name is not null and size is not null
               and stage in ('parsed', 'tokenized', 'judged')
         """)
         coupang_rows = cur.fetchall()
         cur.execute("""
             select id, source_ref, barcode, brand, name, size from collected_products
-            where source = 'kakamuka' and barcode is not null
+            where source = 'kk' and barcode is not null
               and brand is not null and name is not null and size is not null
         """)
         kaka_rows = cur.fetchall()
@@ -101,7 +101,7 @@ def main():
                 update collected_products
                 set barcode = %s, matched_ref = %s
                 where id = %s and barcode is null
-            """, (kbarcode, f"kakamuka:{kref}", cid))
+            """, (kbarcode, f"kk:{kref}", cid))
             used_barcodes.add(kbarcode)
             stats["B_enriched"] += cur.rowcount
 
@@ -135,7 +135,7 @@ def main():
         cur.execute("""
             select id, source_ref, barcode, brand, name, ingredients_raw is not null
             from collected_products
-            where source = 'coupang' and barcode is not null
+            where source = 'cp' and barcode is not null
               and stage in ('parsed', 'tokenized', 'judged')
         """)
         by_barcode = {}
@@ -154,7 +154,7 @@ def main():
                     cur.execute("""
                         update collected_products
                         set stage = 'rejected',
-                            conflict_reason = 'duplicate listing of coupang:' || %s
+                            conflict_reason = 'duplicate listing of cp:' || %s
                         where id = %s
                     """, (keeper[1], g[0]))
                     stats["D_dup_listing_rejected"] += 1
