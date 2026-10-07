@@ -8,6 +8,10 @@
 -- 입력 바코드 중 하나라도 "같은 brand+원재료(ingredients_hash)인데 master_key 가 다른" 기존
 -- master 소속이면, 이름만 바뀐 같은 상품으로 보고 master·바코드를 하나도 쓰지 않고
 -- renamed_held 로 반환한다(수동 확인 대상). 원재료가 다른 master 소속이면 기존처럼 바코드별 conflict.
+--
+-- 판정 전에 입력 바코드를 가진 기존 master 를 모두 FOR UPDATE 로 잠근다. 잠그지 않으면 가드 통과 직후
+-- 운영 이름 변경(save_service_product)이 커밋돼 옛 이름으로 새 master 가 생기는 경쟁이 남는다.
+-- 잠금 후의 판정은 이름 변경 전/후 어느 쪽이든 커밋된 최신 상태를 본다(READ COMMITTED).
 
 create or replace function public.upload_promoted_product(p_master jsonb, p_barcodes jsonb)
 returns jsonb
@@ -27,6 +31,13 @@ declare
   v_attached int := 0;
   v_renamed uuid;
 begin
+  -- 입력 바코드 소유 master 잠금 — 이후 가드·upsert 동안 이름 변경과 직렬화.
+  perform 1 from public.product_masters m
+  where m.id in (
+    select b.master_id from public.product_barcodes b
+    where b.barcode in (select e->>'barcode' from jsonb_array_elements(p_barcodes) e))
+  for update;
+
   -- 이름만 바뀐 같은 상품(같은 brand+원재료, 다른 master_key)이 입력 바코드를 이미 소유하면 그룹째 보류.
   select m.id into v_renamed
   from public.product_barcodes b

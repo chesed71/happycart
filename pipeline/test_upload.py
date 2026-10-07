@@ -111,6 +111,46 @@ def test_rpc_renamed_held():
             conn.rollback()
 
 
+def test_rpc_locks_owner_master():
+    """RPC 가 입력 바코드 소유 master 를 잠가, 업로드 트랜잭션 동안 운영 이름 변경이 끼어들지 못한다(0020)."""
+    import psycopg.errors
+    brand = "UPLOADTEST_LOCK"
+    setup = psycopg.connect(dsn())
+    try:
+        with setup.cursor() as cur:  # 두 연결이 보도록 커밋된 픽스처
+            cur.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,'N','i-lock','okay','v1',now(),'t',now(),'verified') returning id""", (brand,))
+            mid = cur.fetchone()[0]
+            cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, mid))
+        setup.commit()
+        with psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+            with a.cursor() as ca:
+                ca.execute("begin")
+                # 원재료가 다른 업로드라 M 과 master_key 충돌이 없다 — M 을 잠그는 건 0020 의 FOR UPDATE 뿐.
+                # (같은 이름이면 ON CONFLICT 가 원래도 잠가 이 테스트가 수정 없이도 통과해 버린다.)
+                m = dict(_master(brand=brand, ing="i-other"), name="N")
+                r = _call(ca, m, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+                check("lock: 타원재료 소유 바코드 → empty_held", r["master_status"] == "empty_held",
+                      r["master_status"])
+                blocked = False
+                with b.cursor() as cb:
+                    cb.execute("set lock_timeout = '1s'")
+                    try:
+                        cb.execute("update product_masters set name='바뀐이름' where id=%s", (mid,))
+                    except psycopg.errors.LockNotAvailable:
+                        blocked = True
+                    b.rollback()
+                check("lock: 업로드 중 소유 master 이름 변경 차단", blocked)
+                a.rollback()
+    finally:
+        with setup.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+        setup.commit()
+        setup.close()
+
+
 def test_rpc_same_ingredients_different_name():
     """같은 brand+원재료라도 name 이 다르면 별도 master 로 insert(0019 master_key)."""
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
@@ -215,6 +255,11 @@ def test_dryrun_classify():
     other_owner = ("o", ingredients_hash(vals["brand"], "다른원재료"), "x")
     r6 = classify_dryrun(_StubTarget(None, False, {B1: "o"}, [other_owner]), vals, bcs)
     check("dry-run 원재료 다른 소유자=renamed 아님", r6["master_status"] == "inserted", r6["master_status"])
+    # 같은 바코드가 payload 에 두 번 → RPC 처럼 inserted, exists
+    dup = [bcs[0], dict(bcs[0])]
+    r7 = classify_dryrun(_StubTarget(None, False, {}), vals, dup)
+    check("dry-run 중복 바코드=inserted,exists",
+          [b["status"] for b in r7["barcodes"]] == ["inserted", "exists"], str(r7["barcodes"]))
 
 
 def test_no_source_phrase_mapping():
@@ -299,6 +344,7 @@ def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
               test_rpc_same_ingredients_different_name, test_rpc_renamed_held,
+              test_rpc_locks_owner_master,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:

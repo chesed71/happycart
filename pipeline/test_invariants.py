@@ -821,6 +821,20 @@ def test_numbered_variant_name_kept_separate():
         conn.rollback()
 
 
+def test_clean_product_name_quantity_only():
+    """끝 괄호는 안 전체가 수량 문법일 때만 지운다 — 숫자가 섞인 구분자는 보존(DB 불필요)."""
+    from promote import clean_product_name as c
+    keep = ["제품 (제1인산칼슘)", "제품 (제2인산칼슘)", "제품 (비타민 500mg)", "제품 (오메가3 1000mg)",
+            "음료 (비타민 B12)", "크림 (Ver.2)"]
+    for t in keep:
+        check(f"구분자 보존: {t}", c(t, None) == t, c(t, None))
+    strip = {"쫄면 (2인) (462G)": "쫄면", "스프레드 (200)": "스프레드", "캡슐 (5.7G*10입)": "캡슐",
+             "마가렛트 (1박스-8개)": "마가렛트", "젤리 (약 150개입)": "젤리", "두유 (190M*16입)": "두유",
+             "큐티 (27 G)": "큐티", "사탕 (12g x 24개)": "사탕"}
+    for t, want in strip.items():
+        check(f"용량 제거: {t}", c(t, None) == want, c(t, None))
+
+
 def test_batch_and_single_promotion_agree():
     """일괄 승격과 개별 승격의 master 수가 같다 — 그룹핑과 master_key 가 같은 이름 기준."""
     from collections import Counter
@@ -979,6 +993,7 @@ def main():
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
               test_same_ingredients_different_name_split, test_size_variant_same_master,
               test_numbered_variant_name_kept_separate, test_batch_and_single_promotion_agree,
+              test_clean_product_name_quantity_only,
               test_merged_child_verified_promotes_via_parent_only,
               test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
               test_parent_barcode_conflict_holds_merged_child]:

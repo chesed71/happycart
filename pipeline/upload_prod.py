@@ -276,10 +276,13 @@ def classify_dryrun(target, vals, barcodes):
         return {"master_id": existing_id, "master_status": "verified_held", "barcodes": []}
     m_status = "updated" if existing_id is not None else "inserted"
     bc_out, attached = [], 0
+    attached_here = set()  # 이 호출에서 이미 붙인 바코드 — RPC 는 같은 바코드 재입력을 exists 로 본다
     for bc in barcodes:
         owner = target.barcode_owner(bc["barcode"])
-        if owner is None:
-            s = "inserted"; attached += 1
+        if bc["barcode"] in attached_here:
+            s = "exists"; attached += 1
+        elif owner is None:
+            s = "inserted"; attached += 1; attached_here.add(bc["barcode"])
         elif existing_id is not None and str(owner) == str(existing_id):
             s = "exists"; attached += 1
         else:
