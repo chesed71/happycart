@@ -68,6 +68,10 @@ class IngredientEntry {
   /// 매칭 후보 — 한·영 표기와 E-number 를 모두 포함.
   final List<String> aliases;
 
+  /// 매칭 제외 부분문자열(선택). 토큰이 alias 를 포함해도 이 중 하나를 포함하면 이 엔트리로
+  /// 매칭하지 않는다 — 예: sugar 의 `원당` alias 가 `환원당`·`비환원당`에 걸리지 않게 `환원당`.
+  final List<String> excludes;
+
   /// 건강 위험도 등급 (미분류 시 null). good 카탈로그 엔트리는 항상 null.
   final RiskLevel? riskLevel;
 
@@ -82,6 +86,7 @@ class IngredientEntry {
     required this.reasonCode,
     required this.label,
     required this.aliases,
+    this.excludes = const [],
     this.riskLevel,
     this.riskReason,
     this.riskEvidence,

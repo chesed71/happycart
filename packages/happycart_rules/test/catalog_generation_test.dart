@@ -13,6 +13,7 @@ Map<String, Object?> _entryToMap(IngredientEntry entry) => {
   'reasonCode': entry.reasonCode,
   'label': entry.label,
   'aliases': entry.aliases,
+  if (entry.excludes.isNotEmpty) 'excludes': entry.excludes,
 };
 
 void main() {
@@ -91,6 +92,38 @@ void main() {
         expect(parts['bad'], contains('riskLevel: RiskLevel.medium'));
       },
     );
+
+    test('(excludes) 있으면 소스에 방출, 빈 리스트·공백 문자열은 예외', () {
+      Map<String, Object?> withExcludes(Object? ex) => catalogFixture(
+        bad: [
+          {
+            'canonicalKey': 'fx_bad',
+            'reasonCode': 'artificial_sweetener',
+            'label': '픽스처',
+            'aliases': ['fx'],
+            'excludes': ex,
+            'riskLevel': 'medium',
+            'riskReason': '테스트 사유',
+          },
+        ],
+      );
+      expect(
+        buildCatalogParts(withExcludes(['fxz']))['bad'],
+        contains("excludes: ['fxz'],"),
+      );
+      expect(
+        () => buildCatalogParts(withExcludes(<String>[])),
+        throwsFormatException,
+      );
+      expect(
+        () => buildCatalogParts(withExcludes([' '])),
+        throwsFormatException,
+      );
+      expect(
+        () => buildCatalogParts(withExcludes('fxz')),
+        throwsFormatException,
+      );
+    });
 
     test('(b) bad + riskLevel 부재 → 예외', () {
       expect(

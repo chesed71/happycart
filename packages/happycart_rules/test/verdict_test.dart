@@ -108,6 +108,21 @@ void main() {
       expect(result.reasonCodes, ['refined_sugar']);
     });
 
+    test('환원당 / 비환원당 — 원당 alias 에 걸리지 않음 (excludes, v1.3.0)', () {
+      final result = computeVerdict(
+        const IngredientInput(tokens: ['환원당', '비환원당', '환원 당']),
+      );
+      expect(result.verdict, Verdict.okay);
+      expect(result.badMatches, isEmpty);
+    });
+
+    test('excludes 는 그 토큰만 뺀다 — 같은 상품의 설탕은 그대로 매칭', () {
+      final result = computeVerdict(
+        const IngredientInput(tokens: ['환원당', '설탕']),
+      );
+      expect(result.badCanonicalKeys, ['sugar']);
+    });
+
     test('정백당 / 분당 / 포도당은 매칭 안 됨 (v1.1.0 의도된 한계)', () {
       final result = computeVerdict(
         const IngredientInput(tokens: ['정백당', '분당', '포도당']),
