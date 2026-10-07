@@ -151,6 +151,20 @@ def test_rpc_locks_owner_master():
         setup.close()
 
 
+def _wait_lock_wait(pid, timeout=10.0):
+    """backend pid 가 잠금 대기(wait_event_type='Lock')에 들어갈 때까지 기다린다 — sleep 대신 실제 대기 확인."""
+    import time
+    deadline = time.time() + timeout
+    with psycopg.connect(dsn(), autocommit=True) as c, c.cursor() as cur:
+        while time.time() < deadline:
+            cur.execute("select wait_event_type from pg_stat_activity where pid=%s", (pid,))
+            r = cur.fetchone()
+            if r and r[0] == "Lock":
+                return True
+            time.sleep(0.05)
+    return False
+
+
 def test_rpc_serializes_same_ingredients_uploads():
     """같은 brand+원재료의 이름 다른 두 업로드가 같은 신규 바코드를 동시에 처음 올려도 master 가 갈라지지 않는다.
 
@@ -158,7 +172,6 @@ def test_rpc_serializes_same_ingredients_uploads():
     직렬화가 없으면 B 는 가드를 이미 통과한 뒤 B1 은 conflict, B2 는 자기 master 에 붙어 master 가 2개가 된다.
     0020 advisory lock 이 있으면 B 는 가드 전에 기다렸다가 A 의 B1 소유를 보고 renamed_held."""
     import threading
-    import time
     brand = "UPLOADTEST_RACE"
     bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
     a_m = dict(_master(brand=brand, ing="i-race"), name="이름A")
@@ -176,7 +189,7 @@ def test_rpc_serializes_same_ingredients_uploads():
                 b.commit()
             t = threading.Thread(target=run_b)
             t.start()
-            time.sleep(1.5)  # B 가 A 의 잠금(advisory 또는 B1 행)에서 대기하게
+            check("race: 뒤 요청이 앞 요청 커밋 전 잠금 대기", _wait_lock_wait(b.info.backend_pid))
             a.commit()
             t.join(timeout=30)
             check("race: 뒤 요청 완료", "b" in out)
@@ -186,6 +199,54 @@ def test_rpc_serializes_same_ingredients_uploads():
             with psycopg.connect(dsn()) as c, c.cursor() as cur:
                 cur.execute("select count(*) from product_masters where brand=%s", (brand,))
                 check("race: master 1개만(갈라짐 없음)", cur.fetchone()[0] == 1)
+    finally:
+        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_cross_upload_no_deadlock():
+    """원재료가 다른 두 업로드가 서로의 master 바코드를 넣어도 데드락이 없다(0020 잠금 id 순서 고정).
+
+    M1(I1, B1)·M2(I2, B2). 업로드 A = M1 과 같은 master_key + [B2], 업로드 B = M2 와 같은 master_key + [B1].
+    제3 연결 C 가 M1 을 잡은 채 B 를 먼저, A 를 나중에 대기시킨 뒤 C 를 풀면, 순서 고정이 없을 때는
+    B 가 M1→M2, A 가 M2→M1 을 쥐어 결정적으로 데드락(40P01)이 난다."""
+    import threading
+    import psycopg.errors
+    brand = "UPLOADTEST_DL"
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    errs, res = {}, {}
+    try:
+        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+            ids = {}
+            for nm, ing, b in (("N1", "i-dl-1", B1), ("N2", "i-dl-2", B2)):
+                cur.execute("""insert into product_masters
+                    (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at)
+                    values (%s,%s,%s,'okay','v1',now(),'t',now()) returning id""", (brand, nm, ing))
+                ids[nm] = cur.fetchone()[0]
+                cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (b, ids[nm]))
+        with psycopg.connect(dsn()) as hold, psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+            h = hold.cursor()
+            h.execute("select 1 from product_masters where id=%s for update", (ids["N1"],))
+
+            def run(conn, key, master, barcodes):
+                try:
+                    with conn.cursor() as cx:
+                        res[key] = _call(cx, master, barcodes)
+                    conn.commit()
+                except psycopg.errors.DeadlockDetected as e:
+                    errs[key] = e
+                    conn.rollback()
+            tb = threading.Thread(target=run, args=(b, "B", dict(_master(brand=brand, ing="i-dl-2"), name="N2"), [bc(B1)]))
+            tb.start()
+            check("deadlock: B 가 M1 대기", _wait_lock_wait(b.info.backend_pid))
+            ta = threading.Thread(target=run, args=(a, "A", dict(_master(brand=brand, ing="i-dl-1"), name="N1"), [bc(B2)]))
+            ta.start()
+            check("deadlock: A 대기", _wait_lock_wait(a.info.backend_pid))
+            hold.rollback()
+            ta.join(timeout=30); tb.join(timeout=30)
+            check("deadlock: 데드락 없음", not errs, str({k: str(v)[:60] for k, v in errs.items()}))
+            check("deadlock: 두 업로드 모두 완료", set(res) == {"A", "B"}, str(sorted(res)))
     finally:
         with psycopg.connect(dsn()) as c, c.cursor() as cur:
             cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
@@ -386,6 +447,7 @@ def main():
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
               test_rpc_same_ingredients_different_name, test_rpc_renamed_held,
               test_rpc_locks_owner_master, test_rpc_serializes_same_ingredients_uploads,
+              test_rpc_cross_upload_no_deadlock,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:

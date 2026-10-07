@@ -39,11 +39,16 @@ begin
     hashtextextended('upload_promoted_product|' || (p_master->>'brand') || '|'
                      || (p_master->>'ingredients_raw'), 0));
 
-  -- 입력 바코드 소유 master 잠금 — 이후 가드·upsert 동안 이름 변경과 직렬화.
+  -- 이 호출이 건드릴 기존 master(입력 바코드 소유 master + 같은 master_key 의 upsert 대상)를 한 번에
+  -- id 순서로 잠근다 — 가드·upsert 동안 이름 변경과 직렬화하고, 원재료가 다른 업로드끼리 서로의
+  -- master 를 엇갈려 잠가 생기는 데드락을 막는다(잠금 순서 고정).
   perform 1 from public.product_masters m
   where m.id in (
-    select b.master_id from public.product_barcodes b
-    where b.barcode in (select e->>'barcode' from jsonb_array_elements(p_barcodes) e))
+          select b.master_id from public.product_barcodes b
+          where b.barcode in (select e->>'barcode' from jsonb_array_elements(p_barcodes) e))
+     or m.master_key = md5((p_master->>'brand') || '|' || (p_master->>'name') || '|'
+                           || (p_master->>'ingredients_raw'))
+  order by m.id
   for update;
 
   -- 이름만 바뀐 같은 상품(같은 brand+원재료, 다른 master_key)이 입력 바코드를 이미 소유하면 그룹째 보류.
