@@ -4,8 +4,8 @@
   stage='judged' AND barcode AND ingredients_raw/tokens AND brand·name·size NOT NULL
   AND confidence is distinct from 'low'
 
-그룹핑: brand + ingredients_raw + 정규화 상품명(clean_product_name — 끝 용량 괄호 제거)
-완전 일치 = 같은 master. 용량·개수만 다른 포장 변형은 이름이 같아 master 1개 + 바코드 N개로,
+그룹핑: brand + ingredients_raw + master 이름(clean_product_name — 끝 용량 괄호 제거)
+완전 일치 = 같은 master(= DB master_key 와 같은 기준). 용량·개수만 다른 포장 변형은 이름이 같아 master 1개 + 바코드 N개로,
 원재료 표기가 같아도 상품명이 다른 상품(맛·종류 차이)은 master 를 따로 만든다(0019).
   - 2건 이상 그룹은 전수 리포트 출력
 
@@ -25,7 +25,6 @@ import re
 from collections import Counter
 
 from common import connect
-from match_enrich import norm
 
 # product_masters.source 는 collected_products.source 와 같은 약어 어휘를 쓴다(cp/kk/lz)
 # — 2026-10-07 운영까지 약어로 통일. 예전에는 사람이 읽는 문구로 매핑했으나 이제 항등이라
@@ -33,9 +32,16 @@ from match_enrich import norm
 # 값으로 승격 경로를 타지 않으므로 여기서 다루지 않는다.
 
 # 앱 표시명은 브랜드+상품명(brand·size 는 별도 컬럼). 수집 타이틀에서 앞 브랜드와
-# 끝 용량(숫자 든 괄호)을 떼어 product_masters.name 을 제품명만으로 만든다.
-# 맛/버전 괄호("(밀크)", "(오리지널)")는 숫자가 없으므로 보존한다.
-_SIZE_PAREN = re.compile(r"\s*\((?=[^()]*\d)[^()]*\)\s*$")
+# 끝 용량 괄호를 떼어 product_masters.name 을 제품명만으로 만든다. 용량 괄호 = 숫자만
+# 든 괄호("(200)") 또는 숫자+단위/수량("(1KG)", "(7G*16입)", "(1박스-8개)", "(2인)")가 든 괄호.
+# 맛/버전 괄호("(밀크)", "(오리지널)")와 숫자가 든 구분자("(비타민 B12)", "(Ver.2)")는 보존한다
+# — master 는 이 이름으로 나뉘므로(master_key) 구분자를 지우면 별개 상품이 합쳐진다.
+_SIZE_PAREN = re.compile(
+    r"\s*\((?:\s*\d+(?:\.\d+)?\s*"
+    r"|(?=[^()]*\d(?:\.\d+)?\s*(?:kg|mg|ml|g|l|인분|인|입|개|봉|팩|매|구|캔|병|포|박스|ea|p)(?![a-z]))[^()]*)"
+    r"\)\s*$",
+    re.IGNORECASE,
+)
 
 # 선두 판촉/채널 브래킷: "[SCO]", "【단독행사】", "《기획》", "<한정>" 등 이름 맨 앞의
 # 대괄호/모난괄호 블록을 앞에서 반복 제거한다(상품명 자체와 무관한 채널·행사 표기).
@@ -194,16 +200,16 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
     stats["held_reviewed_incomplete"] = reviewed_incomplete
     stats["held_flagged"] = held_flagged
 
-    # 그룹핑: (brand, ingredients_raw, 정규화 상품명). 상품명은 master 에 저장할 이름과 같은
-    # 규칙(clean_product_name)으로 떼어 비교한다 — 끝 용량 괄호만 다른 포장 변형은 한 그룹,
-    # 맛·종류가 달라 이름이 다르면 원재료 표기가 같아도 다른 그룹(=다른 master).
+    # 그룹핑: (brand, ingredients_raw, master 이름). master 이름은 저장·유일키(master_key)와
+    # 똑같이 clean_product_name 결과 그대로 쓴다 — 별도 정규화를 하면 일괄/개별 승격의 master
+    # 수가 달라진다. 끝 용량 괄호만 다른 포장 변형은 한 그룹, 이름이 다르면 다른 master.
     groups: dict[tuple, list] = {}
     for r in rows:
-        groups.setdefault((r[3], r[8], norm(clean_product_name(r[4], r[3]))), []).append(r)
+        groups.setdefault((r[3], r[8], clean_product_name(r[4], r[3])), []).append(r)
 
     promoted_masters = 0
     promoted_barcodes = 0
-    for (brand, ingredients_raw, _name_key), members in groups.items():
+    for (brand, ingredients_raw, master_name), members in groups.items():
         if len(members) > 1:
             print(f"GROUP [{brand}] x{len(members)}: "
                   + "; ".join(f"{m[4]} ({m[5]}, {m[7]})" for m in members))
@@ -234,8 +240,6 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             continue
 
         rep = members[0]
-        # 앱 표시명 = 브랜드+상품명. 수집 타이틀에서 앞 브랜드·끝 용량을 떼어 제품명만 저장.
-        master_name = clean_product_name(rep[4], rep[3])
         cur.execute("""
             insert into product_masters
               (brand, name, category, ingredients_raw, ingredients_tokens,

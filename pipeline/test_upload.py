@@ -17,7 +17,7 @@ import psycopg
 
 import promote
 from common import dsn
-from upload_prod import classify_dryrun, writeback_attachments
+from upload_prod import classify_dryrun, ingredients_hash, master_key, writeback_attachments
 
 results = []
 
@@ -87,6 +87,30 @@ def test_rpc_verified_held():
         conn.rollback()
 
 
+def test_rpc_renamed_held():
+    """운영에서 이름이 바뀐 같은 상품(같은 brand+원재료) master 가 기존 바코드를 가지면, 신규 바코드가
+    섞여도 새 master 를 만들지 않고 renamed_held(0020). verified·unverified 모두."""
+    for status in ("verified", "unverified"):
+        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+            cur.execute("begin")
+            m = dict(_master(brand="UPLOADTEST_RN", ing="i-rn"), name="새이름")
+            cur.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,'옛이름',%s,'okay','v1',now(),'t',now(),%s) returning id""",
+                (m["brand"], m["ingredients_raw"], status))
+            old_id = cur.fetchone()[0]
+            cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, old_id))
+            r = _call(cur, m, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None},
+                               {"barcode": B2, "size": "1", "image_url": None, "image_source_url": None}])
+            check(f"renamed_held({status})", r["master_status"] == "renamed_held", r["master_status"])
+            check(f"renamed_held({status}): 기존 master id", str(r["master_id"]) == str(old_id))
+            cur.execute("select count(*) from product_masters where brand=%s", (m["brand"],))
+            check(f"renamed_held({status}): 새 master 미생성", cur.fetchone()[0] == 1)
+            cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+            check(f"renamed_held({status}): 신규 바코드 미연결", cur.fetchone()[0] is False)
+            conn.rollback()
+
+
 def test_rpc_same_ingredients_different_name():
     """같은 brand+원재료라도 name 이 다르면 별도 master 로 insert(0019 master_key)."""
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
@@ -146,12 +170,15 @@ def test_rpc_mixed_barcode():
 
 class _StubTarget:
     """dry-run 분류 단위 테스트용 — DB 없이 plan/owner를 흉내낸다."""
-    def __init__(self, existing_id, verified, owners):
+    def __init__(self, existing_id, verified, owners, owner_masters=()):
         self._e, self._v, self._owners = existing_id, verified, owners
+        self._owner_masters = list(owner_masters)
     def plan_master(self, vals):
         return self._e, self._v
     def barcode_owner(self, barcode):
         return self._owners.get(barcode)
+    def barcode_owner_masters(self, barcodes):
+        return self._owner_masters
 
 
 def test_dryrun_classify():
@@ -178,6 +205,16 @@ def test_dryrun_classify():
     r4 = classify_dryrun(_StubTarget(None, False, {B1: "o", B2: "o"}), vals, bcs)
     check("dry-run 전부충돌 신규=empty_held", r4["master_status"] == "empty_held")
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
+    # 입력 바코드가 '같은 brand+원재료, 다른 이름' master 소속 → renamed_held (RPC 0020 과 동일)
+    renamed_owner = ("old-mid", ingredients_hash(vals["brand"], vals["ingredients_raw"]),
+                     master_key(vals["brand"], "옛이름", vals["ingredients_raw"]))
+    r5 = classify_dryrun(_StubTarget(None, False, {B1: "old-mid"}, [renamed_owner]), vals, bcs)
+    check("dry-run 이름바뀐 같은상품=renamed_held", r5["master_status"] == "renamed_held", r5["master_status"])
+    check("dry-run renamed_held: 바코드 미처리", r5["barcodes"] == [] and r5["master_id"] == "old-mid")
+    # 원재료가 다른 master 소속이면 renamed 아님 → 기존 분류(B1 conflict, B2 inserted)
+    other_owner = ("o", ingredients_hash(vals["brand"], "다른원재료"), "x")
+    r6 = classify_dryrun(_StubTarget(None, False, {B1: "o"}, [other_owner]), vals, bcs)
+    check("dry-run 원재료 다른 소유자=renamed 아님", r6["master_status"] == "inserted", r6["master_status"])
 
 
 def test_no_source_phrase_mapping():
@@ -261,7 +298,7 @@ def test_writeback_row_scoped():
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
-              test_rpc_same_ingredients_different_name,
+              test_rpc_same_ingredients_different_name, test_rpc_renamed_held,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:

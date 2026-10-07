@@ -804,6 +804,45 @@ def test_same_ingredients_different_name_split():
         conn.rollback()
 
 
+def test_numbered_variant_name_kept_separate():
+    """숫자가 든 구분자 괄호("(비타민 B12)")는 용량이 아니므로 지우지 않고 master 도 분리한다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        p1 = _promotable_parent(cur, SYN_BC_1, name="음료 (비타민 B12)")
+        p2 = _promotable_parent(cur, SYN_BC_2, name="음료 (비타민 B6)")
+        run_promotion(cur, ids={str(p1), str(p2)}, stats=Counter())
+        cur.execute("""select b.barcode, m.name from product_barcodes b join product_masters m
+                       on m.id = b.master_id where b.barcode = any(%s)""", ([SYN_BC_1, SYN_BC_2],))
+        names = dict(cur.fetchall())
+        check("숫자 구분자 보존(B12)", names.get(SYN_BC_1) == "음료 (비타민 B12)", str(names))
+        check("숫자 구분자 상품 master 분리", names.get(SYN_BC_1) != names.get(SYN_BC_2), str(names))
+        conn.rollback()
+
+
+def test_batch_and_single_promotion_agree():
+    """일괄 승격과 개별 승격의 master 수가 같다 — 그룹핑과 master_key 가 같은 이름 기준."""
+    from collections import Counter
+    from promote import run_promotion
+    counts = []
+    for mode in ("batch", "single"):
+        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+            cur.execute("begin")
+            p1 = _promotable_parent(cur, SYN_BC_1, name="하얀 설탕 (1KG)")
+            p2 = _promotable_parent(cur, SYN_BC_2, name="하얀설탕 (3KG)")
+            if mode == "batch":
+                run_promotion(cur, ids={str(p1), str(p2)}, stats=Counter())
+            else:
+                run_promotion(cur, id=str(p1), stats=Counter())
+                run_promotion(cur, id=str(p2), stats=Counter())
+            cur.execute("select count(distinct master_id) from product_barcodes where barcode = any(%s)",
+                        ([SYN_BC_1, SYN_BC_2],))
+            counts.append(cur.fetchone()[0])
+            conn.rollback()
+    check("일괄/개별 승격 master 수 일치", counts[0] == counts[1], str(counts))
+
+
 def test_size_variant_same_master():
     """끝 용량 괄호만 다른 포장 변형은 master 1개 + 바코드 N개로 승격한다."""
     from collections import Counter
@@ -939,6 +978,7 @@ def main():
               test_clean_product_name, test_merged_child_promotes_with_parent,
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
               test_same_ingredients_different_name_split, test_size_variant_same_master,
+              test_numbered_variant_name_kept_separate, test_batch_and_single_promotion_agree,
               test_merged_child_verified_promotes_via_parent_only,
               test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
               test_parent_barcode_conflict_holds_merged_child]:

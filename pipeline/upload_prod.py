@@ -51,6 +51,22 @@ def master_key(brand, name, ingredients_raw):
     return hashlib.md5(f"{brand}|{name}|{ingredients_raw}".encode()).hexdigest()
 
 
+def ingredients_hash(brand, ingredients_raw):
+    """운영 product_masters.ingredients_hash(일반 인덱스)와 같은 식 — brand|ingredients_raw."""
+    return hashlib.md5(f"{brand}|{ingredients_raw}".encode()).hexdigest()
+
+
+def renamed_owner_id(owners, vals):
+    """입력 바코드 소유 master 중 '이름만 바뀐 같은 상품'(같은 ingredients_hash, 다른 master_key)의
+    id. RPC(0020) renamed_held 가드와 같은 판정. owners: [(master_id, ingredients_hash, master_key)]"""
+    ih = ingredients_hash(vals["brand"], vals["ingredients_raw"])
+    mk = master_key(vals["brand"], vals["name"], vals["ingredients_raw"])
+    for mid, oih, omk in owners:
+        if oih == ih and omk != mk:
+            return mid
+    return None
+
+
 def _jsonable(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
@@ -116,6 +132,14 @@ class RestTarget:
         rows = self._req("GET", f"/product_barcodes?barcode=eq.{barcode}&select=master_id")
         return rows[0]["master_id"] if rows else None
 
+    def barcode_owner_masters(self, barcodes):
+        if not barcodes:
+            return []
+        rows = self._req("GET", "/product_barcodes?barcode=in.(" + ",".join(barcodes) + ")"
+                         "&select=master_id,product_masters(ingredients_hash,master_key)")
+        return [(r["master_id"], r["product_masters"]["ingredients_hash"],
+                 r["product_masters"]["master_key"]) for r in rows or []]
+
     def upload(self, master, barcodes):
         return self._req("POST", "/rpc/upload_promoted_product",
                          {"p_master": master, "p_barcodes": barcodes})
@@ -139,6 +163,13 @@ class PgTarget:
             cur.execute("select master_id from product_barcodes where barcode=%s", (barcode,))
             r = cur.fetchone()
             return r[0] if r else None
+
+    def barcode_owner_masters(self, barcodes):
+        with self.conn.cursor() as cur:
+            cur.execute("""select b.master_id, m.ingredients_hash, m.master_key
+                           from product_barcodes b join product_masters m on m.id = b.master_id
+                           where b.barcode = any(%s)""", (list(barcodes),))
+            return cur.fetchall()
 
     def upload(self, master, barcodes):
         with self.conn.cursor() as cur:
@@ -236,6 +267,10 @@ def writeback_attachments(cur, attach_rows):
 
 def classify_dryrun(target, vals, barcodes):
     """쓰기 없이 master/barcode가 어떻게 처리될지 분류 (운영 읽기만). RPC와 동일 분류."""
+    owners = target.barcode_owner_masters([bc["barcode"] for bc in barcodes])
+    renamed = renamed_owner_id(owners, vals)
+    if renamed is not None:
+        return {"master_id": renamed, "master_status": "renamed_held", "barcodes": []}
     existing_id, verified = target.plan_master(vals)
     if verified:
         return {"master_id": existing_id, "master_status": "verified_held", "barcodes": []}
@@ -294,6 +329,8 @@ def main():
             stats[f"master_{res['master_status']}"] += 1
             if res["master_status"] == "verified_held":
                 print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
+            elif res["master_status"] == "renamed_held":
+                print(f"  RENAMED-HELD ({vals['brand']} / {vals['name']}) — 운영에서 이름이 바뀐 같은 상품, 수동 확인")
             elif res["master_status"] == "empty_held":
                 print(f"  EMPTY-HELD ({vals['brand']} / {vals['name']}) — 바코드 전부 충돌, master 미생성")
             for b in res["barcodes"]:
