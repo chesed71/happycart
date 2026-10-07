@@ -101,6 +101,13 @@ void main() {
       expect(result.badCanonicalKeys, ['sugar']);
     });
 
+    test('원당 — refined_sugar 로 매칭 (v1.3.0)', () {
+      final result = computeVerdict(const IngredientInput(tokens: ['원당']));
+      expect(result.verdict, Verdict.notOkay);
+      expect(result.badCanonicalKeys, ['sugar']);
+      expect(result.reasonCodes, ['refined_sugar']);
+    });
+
     test('정백당 / 분당 / 포도당은 매칭 안 됨 (v1.1.0 의도된 한계)', () {
       final result = computeVerdict(
         const IngredientInput(tokens: ['정백당', '분당', '포도당']),
@@ -218,7 +225,7 @@ void main() {
     });
   });
 
-  test('ruleVersion is v1.2.0', () {
-    expect(ruleVersion, 'v1.2.0');
+  test('ruleVersion is v1.3.0', () {
+    expect(ruleVersion, 'v1.3.0');
   });
 }
