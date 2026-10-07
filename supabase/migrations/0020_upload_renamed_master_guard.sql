@@ -12,6 +12,9 @@
 -- 판정 전에 입력 바코드를 가진 기존 master 를 모두 FOR UPDATE 로 잠근다. 잠그지 않으면 가드 통과 직후
 -- 운영 이름 변경(save_service_product)이 커밋돼 옛 이름으로 새 master 가 생기는 경쟁이 남는다.
 -- 잠금 후의 판정은 이름 변경 전/후 어느 쪽이든 커밋된 최신 상태를 본다(READ COMMITTED).
+-- 또한 같은 brand+원재료 업로드끼리는 트랜잭션 advisory lock 으로 직렬화한다. 이름이 다른 두 업로드가
+-- 같은 미등록 바코드를 동시에 처음 올리면 둘 다 소유자 없음으로 가드를 통과해 master 가 갈라질 수 있어서다
+-- — 직렬화하면 뒤 요청은 앞 요청이 커밋한 바코드 소유자를 보고 renamed_held 가 된다.
 
 create or replace function public.upload_promoted_product(p_master jsonb, p_barcodes jsonb)
 returns jsonb
@@ -31,6 +34,11 @@ declare
   v_attached int := 0;
   v_renamed uuid;
 begin
+  -- 같은 brand+원재료 업로드 직렬화(트랜잭션 종료 시 자동 해제).
+  perform pg_advisory_xact_lock(
+    hashtextextended('upload_promoted_product|' || (p_master->>'brand') || '|'
+                     || (p_master->>'ingredients_raw'), 0));
+
   -- 입력 바코드 소유 master 잠금 — 이후 가드·upsert 동안 이름 변경과 직렬화.
   perform 1 from public.product_masters m
   where m.id in (
