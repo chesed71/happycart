@@ -17,7 +17,7 @@ import psycopg
 
 import promote
 from common import dsn
-from upload_prod import classify_dryrun, writeback_attachments
+from upload_prod import classify_dryrun, ingredients_hash, master_key, writeback_attachments
 
 results = []
 
@@ -73,7 +73,7 @@ def test_rpc_insert_and_idempotent():
 def test_rpc_verified_held():
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # 같은 hash의 verified master를 먼저 둔다
+        # 같은 master_key(brand·name·원재료)의 verified master를 먼저 둔다
         m = _master(brand="UPLOADTEST_VER")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
@@ -84,6 +84,191 @@ def test_rpc_verified_held():
         check("RPC verified: barcode 연결 안 함", r["barcodes"] == [])
         cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B1,))
         check("RPC verified: barcode 미생성", cur.fetchone()[0] is False)
+        conn.rollback()
+
+
+def test_rpc_renamed_held():
+    """운영에서 이름이 바뀐 같은 상품(같은 brand+원재료) master 가 기존 바코드를 가지면, 신규 바코드가
+    섞여도 새 master 를 만들지 않고 renamed_held(0020). verified·unverified 모두."""
+    for status in ("verified", "unverified"):
+        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+            cur.execute("begin")
+            m = dict(_master(brand="UPLOADTEST_RN", ing="i-rn"), name="새이름")
+            cur.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,'옛이름',%s,'okay','v1',now(),'t',now(),%s) returning id""",
+                (m["brand"], m["ingredients_raw"], status))
+            old_id = cur.fetchone()[0]
+            cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, old_id))
+            r = _call(cur, m, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None},
+                               {"barcode": B2, "size": "1", "image_url": None, "image_source_url": None}])
+            check(f"renamed_held({status})", r["master_status"] == "renamed_held", r["master_status"])
+            check(f"renamed_held({status}): 기존 master id", str(r["master_id"]) == str(old_id))
+            cur.execute("select count(*) from product_masters where brand=%s", (m["brand"],))
+            check(f"renamed_held({status}): 새 master 미생성", cur.fetchone()[0] == 1)
+            cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+            check(f"renamed_held({status}): 신규 바코드 미연결", cur.fetchone()[0] is False)
+            conn.rollback()
+
+
+def test_rpc_locks_owner_master():
+    """RPC 가 입력 바코드 소유 master 를 잠가, 업로드 트랜잭션 동안 운영 이름 변경이 끼어들지 못한다(0020)."""
+    import psycopg.errors
+    brand = "UPLOADTEST_LOCK"
+    setup = psycopg.connect(dsn())
+    try:
+        with setup.cursor() as cur:  # 두 연결이 보도록 커밋된 픽스처
+            cur.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,'N','i-lock','okay','v1',now(),'t',now(),'verified') returning id""", (brand,))
+            mid = cur.fetchone()[0]
+            cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, mid))
+        setup.commit()
+        with psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+            with a.cursor() as ca:
+                ca.execute("begin")
+                # 원재료가 다른 업로드라 M 과 master_key 충돌이 없다 — M 을 잠그는 건 0020 의 FOR UPDATE 뿐.
+                # (같은 이름이면 ON CONFLICT 가 원래도 잠가 이 테스트가 수정 없이도 통과해 버린다.)
+                m = dict(_master(brand=brand, ing="i-other"), name="N")
+                r = _call(ca, m, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+                check("lock: 타원재료 소유 바코드 → empty_held", r["master_status"] == "empty_held",
+                      r["master_status"])
+                blocked = False
+                with b.cursor() as cb:
+                    cb.execute("set lock_timeout = '1s'")
+                    try:
+                        cb.execute("update product_masters set name='바뀐이름' where id=%s", (mid,))
+                    except psycopg.errors.LockNotAvailable:
+                        blocked = True
+                    b.rollback()
+                check("lock: 업로드 중 소유 master 이름 변경 차단", blocked)
+                a.rollback()
+    finally:
+        with setup.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+        setup.commit()
+        setup.close()
+
+
+def _wait_lock_wait(pid, timeout=10.0):
+    """backend pid 가 잠금 대기(wait_event_type='Lock')에 들어갈 때까지 기다린다 — sleep 대신 실제 대기 확인."""
+    import time
+    deadline = time.time() + timeout
+    with psycopg.connect(dsn(), autocommit=True) as c, c.cursor() as cur:
+        while time.time() < deadline:
+            cur.execute("select wait_event_type from pg_stat_activity where pid=%s", (pid,))
+            r = cur.fetchone()
+            if r and r[0] == "Lock":
+                return True
+            time.sleep(0.05)
+    return False
+
+
+def test_rpc_serializes_same_ingredients_uploads():
+    """같은 brand+원재료의 이름 다른 두 업로드가 같은 신규 바코드를 동시에 처음 올려도 master 가 갈라지지 않는다.
+
+    뒤 요청(B)을 다른 스레드에서 앞 요청(A)의 커밋 전에 시작해, A 커밋 후 B 가 이어서 끝나게 한다.
+    직렬화가 없으면 B 는 가드를 이미 통과한 뒤 B1 은 conflict, B2 는 자기 master 에 붙어 master 가 2개가 된다.
+    0020 advisory lock 이 있으면 B 는 가드 전에 기다렸다가 A 의 B1 소유를 보고 renamed_held."""
+    import threading
+    brand = "UPLOADTEST_RACE"
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    a_m = dict(_master(brand=brand, ing="i-race"), name="이름A")
+    b_m = dict(_master(brand=brand, ing="i-race"), name="이름B")
+    out = {}
+    try:
+        with psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+            ca, cb = a.cursor(), b.cursor()
+            ca.execute("begin")
+            check("race: 앞 요청 inserted", _call(ca, a_m, [bc(B1)])["master_status"] == "inserted")
+
+            def run_b():
+                cb.execute("begin")
+                out["b"] = _call(cb, b_m, [bc(B1), bc(B2)])
+                b.commit()
+            t = threading.Thread(target=run_b)
+            t.start()
+            check("race: 뒤 요청이 앞 요청 커밋 전 잠금 대기", _wait_lock_wait(b.info.backend_pid))
+            a.commit()
+            t.join(timeout=30)
+            check("race: 뒤 요청 완료", "b" in out)
+            rb = out.get("b", {})
+            check("race: 뒤 요청은 renamed_held", rb.get("master_status") == "renamed_held",
+                  str(rb.get("master_status")) + " " + str(rb.get("barcodes")))
+            with psycopg.connect(dsn()) as c, c.cursor() as cur:
+                cur.execute("select count(*) from product_masters where brand=%s", (brand,))
+                check("race: master 1개만(갈라짐 없음)", cur.fetchone()[0] == 1)
+    finally:
+        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_cross_upload_no_deadlock():
+    """원재료가 다른 두 업로드가 서로의 master 바코드를 넣어도 데드락이 없다(0020 잠금 id 순서 고정).
+
+    M1(I1, B1)·M2(I2, B2). 업로드 A = M1 과 같은 master_key + [B2], 업로드 B = M2 와 같은 master_key + [B1].
+    제3 연결 C 가 M1 을 잡은 채 B 를 먼저, A 를 나중에 대기시킨 뒤 C 를 풀면, 순서 고정이 없을 때는
+    B 가 M1→M2, A 가 M2→M1 을 쥐어 결정적으로 데드락(40P01)이 난다."""
+    import threading
+    import psycopg.errors
+    brand = "UPLOADTEST_DL"
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    errs, res = {}, {}
+    try:
+        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+            ids = {}
+            for nm, ing, b in (("N1", "i-dl-1", B1), ("N2", "i-dl-2", B2)):
+                cur.execute("""insert into product_masters
+                    (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at)
+                    values (%s,%s,%s,'okay','v1',now(),'t',now()) returning id""", (brand, nm, ing))
+                ids[nm] = cur.fetchone()[0]
+                cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (b, ids[nm]))
+        with psycopg.connect(dsn()) as hold, psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+            h = hold.cursor()
+            h.execute("select 1 from product_masters where id=%s for update", (ids["N1"],))
+
+            def run(conn, key, master, barcodes):
+                try:
+                    with conn.cursor() as cx:
+                        res[key] = _call(cx, master, barcodes)
+                    conn.commit()
+                except psycopg.errors.DeadlockDetected as e:
+                    errs[key] = e
+                    conn.rollback()
+            tb = threading.Thread(target=run, args=(b, "B", dict(_master(brand=brand, ing="i-dl-2"), name="N2"), [bc(B1)]))
+            tb.start()
+            check("deadlock: B 가 M1 대기", _wait_lock_wait(b.info.backend_pid))
+            ta = threading.Thread(target=run, args=(a, "A", dict(_master(brand=brand, ing="i-dl-1"), name="N1"), [bc(B2)]))
+            ta.start()
+            check("deadlock: A 대기", _wait_lock_wait(a.info.backend_pid))
+            hold.rollback()
+            ta.join(timeout=30); tb.join(timeout=30)
+            check("deadlock: 데드락 없음", not errs, str({k: str(v)[:60] for k, v in errs.items()}))
+            check("deadlock: 두 업로드 모두 완료", set(res) == {"A", "B"}, str(sorted(res)))
+    finally:
+        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_same_ingredients_different_name():
+    """같은 brand+원재료라도 name 이 다르면 별도 master 로 insert(0019 master_key)."""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        a = dict(_master(brand="UPLOADTEST_NM"), name="오디")
+        b = dict(_master(brand="UPLOADTEST_NM"), name="오미자")
+        ra = _call(cur, a, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+        rb = _call(cur, b, [{"barcode": B2, "size": "1", "image_url": None, "image_source_url": None}])
+        check("이름 다른 master 각각 inserted",
+              ra["master_status"] == "inserted" and rb["master_status"] == "inserted",
+              f'{ra["master_status"]}/{rb["master_status"]}')
+        check("이름 다른 master id 분리", ra["master_id"] != rb["master_id"])
+        # 이름이 같으면 기존 master 재사용(updated)
+        rc = _call(cur, dict(a), [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+        check("같은 이름은 기존 master 재사용", rc["master_id"] == ra["master_id"] and rc["master_status"] == "updated",
+              rc["master_status"])
         conn.rollback()
 
 
@@ -127,12 +312,15 @@ def test_rpc_mixed_barcode():
 
 class _StubTarget:
     """dry-run 분류 단위 테스트용 — DB 없이 plan/owner를 흉내낸다."""
-    def __init__(self, existing_id, verified, owners):
+    def __init__(self, existing_id, verified, owners, owner_masters=()):
         self._e, self._v, self._owners = existing_id, verified, owners
+        self._owner_masters = list(owner_masters)
     def plan_master(self, vals):
         return self._e, self._v
     def barcode_owner(self, barcode):
         return self._owners.get(barcode)
+    def barcode_owner_masters(self, barcodes):
+        return self._owner_masters
 
 
 def test_dryrun_classify():
@@ -159,6 +347,21 @@ def test_dryrun_classify():
     r4 = classify_dryrun(_StubTarget(None, False, {B1: "o", B2: "o"}), vals, bcs)
     check("dry-run 전부충돌 신규=empty_held", r4["master_status"] == "empty_held")
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
+    # 입력 바코드가 '같은 brand+원재료, 다른 이름' master 소속 → renamed_held (RPC 0020 과 동일)
+    renamed_owner = ("old-mid", ingredients_hash(vals["brand"], vals["ingredients_raw"]),
+                     master_key(vals["brand"], "옛이름", vals["ingredients_raw"]))
+    r5 = classify_dryrun(_StubTarget(None, False, {B1: "old-mid"}, [renamed_owner]), vals, bcs)
+    check("dry-run 이름바뀐 같은상품=renamed_held", r5["master_status"] == "renamed_held", r5["master_status"])
+    check("dry-run renamed_held: 바코드 미처리", r5["barcodes"] == [] and r5["master_id"] == "old-mid")
+    # 원재료가 다른 master 소속이면 renamed 아님 → 기존 분류(B1 conflict, B2 inserted)
+    other_owner = ("o", ingredients_hash(vals["brand"], "다른원재료"), "x")
+    r6 = classify_dryrun(_StubTarget(None, False, {B1: "o"}, [other_owner]), vals, bcs)
+    check("dry-run 원재료 다른 소유자=renamed 아님", r6["master_status"] == "inserted", r6["master_status"])
+    # 같은 바코드가 payload 에 두 번 → RPC 처럼 inserted, exists
+    dup = [bcs[0], dict(bcs[0])]
+    r7 = classify_dryrun(_StubTarget(None, False, {}), vals, dup)
+    check("dry-run 중복 바코드=inserted,exists",
+          [b["status"] for b in r7["barcodes"]] == ["inserted", "exists"], str(r7["barcodes"]))
 
 
 def test_no_source_phrase_mapping():
@@ -242,6 +445,9 @@ def test_writeback_row_scoped():
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
+              test_rpc_same_ingredients_different_name, test_rpc_renamed_held,
+              test_rpc_locks_owner_master, test_rpc_serializes_same_ingredients_uploads,
+              test_rpc_cross_upload_no_deadlock,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:

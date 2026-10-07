@@ -72,7 +72,8 @@ products 에서 바코드·중량·이미지 종속 컬럼을 뺀 나머지를 �
 | `verdict` | verdict_enum | NOT NULL | `okay` / `not_okay` |
 | `rule_version`, `computed_at`, `source`, `source_url`, `source_checked_at`, `label_version` | | | products 와 동일 |
 | `verified_status` | verified_status_enum | NOT NULL default 'unverified' | `verified` 만 lookup_product 노출 |
-| `ingredients_hash` | text | generated `md5(brand‖ingredients_raw)`, UNIQUE | 적재 시 dedupe·upsert conflict target |
+| `ingredients_hash` | text | generated `md5(brand‖ingredients_raw)`, 일반 인덱스 | 0019부터 유일키 아님 — 운영 조회·호환용 |
+| `master_key` | text | generated `md5(brand‖name‖ingredients_raw)`, UNIQUE (0019) | 적재 시 dedupe·upsert conflict target. 원재료 표기가 같아도 상품명이 다르면 별도 master |
 | `created_at`, `updated_at` | timestamptz | | `tg_set_updated_at` 트리거 |
 
 **CHECK**: `masters_not_okay_requires_bad_match`, `masters_okay_requires_no_bad_match`

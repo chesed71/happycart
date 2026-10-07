@@ -4,15 +4,16 @@
   stage='judged' AND barcode AND ingredients_raw/tokens AND brand·name·size NOT NULL
   AND confidence is distinct from 'low'
 
-그룹핑: brand + ingredients_raw 완전 일치 = 같은 master (분리 계획과 동일 기준).
+그룹핑: brand + ingredients_raw + master 이름(clean_product_name — 끝 용량 괄호 제거)
+완전 일치 = 같은 master(= DB master_key 와 같은 기준). 용량·개수만 다른 포장 변형은 이름이 같아 master 1개 + 바코드 N개로,
+원재료 표기가 같아도 상품명이 다른 상품(맛·종류 차이)은 master 를 따로 만든다(0019).
   - 2건 이상 그룹은 전수 리포트 출력
-  - 그룹 내 정규화 name이 서로 다르면 (변형이 아니라 별개 상품 의심) 승격 보류
 
 승격 대상 = 후보 멤버 + 각 멤버에 머지된 자식 바코드(사람이 바코드 합치기로 '같은
 상품'이라 판단한 관계 근거로 동반 승격). 자식은 사람 검수 필드(review_decision 등)를
 건드리지 않고 stage/promoted_master_id 만 갱신한다.
 
-master upsert는 ingredients_hash(UNIQUE)를 conflict target으로 — 초기 dedupe 전용.
+master upsert는 master_key(brand|name|ingredients_raw, UNIQUE)를 conflict target으로 — 초기 dedupe 전용.
 영속 식별은 uuid (§3.4). verified_status='unverified' — 앱 비노출.
 
 사용: .venv/bin/python promote.py [--dsn DSN] [--dry-run]
@@ -24,7 +25,6 @@ import re
 from collections import Counter
 
 from common import connect
-from match_enrich import norm
 
 # product_masters.source 는 collected_products.source 와 같은 약어 어휘를 쓴다(cp/kk/lz)
 # — 2026-10-07 운영까지 약어로 통일. 예전에는 사람이 읽는 문구로 매핑했으나 이제 항등이라
@@ -32,9 +32,16 @@ from match_enrich import norm
 # 값으로 승격 경로를 타지 않으므로 여기서 다루지 않는다.
 
 # 앱 표시명은 브랜드+상품명(brand·size 는 별도 컬럼). 수집 타이틀에서 앞 브랜드와
-# 끝 용량(숫자 든 괄호)을 떼어 product_masters.name 을 제품명만으로 만든다.
-# 맛/버전 괄호("(밀크)", "(오리지널)")는 숫자가 없으므로 보존한다.
-_SIZE_PAREN = re.compile(r"\s*\((?=[^()]*\d)[^()]*\)\s*$")
+# 끝 용량 괄호를 떼어 product_masters.name 을 제품명만으로 만든다. 용량 괄호 = 괄호 안 전체가
+# 수량 문법인 것 — "숫자[단위]" 를 *·x·×·+·-·/·, 로 이은 형태("(200)", "(1KG)", "(7G*16입)",
+# "(1박스-8개)", "(약 150개입)", "(2인)"). 맛/버전 괄호("(밀크)")와 숫자가 섞인 구분자
+# ("(비타민 B12)", "(제1인산칼슘)", "(비타민 500mg)", "(Ver.2)")는 보존한다 — master 는 이
+# 이름으로 나뉘므로(master_key) 구분자를 지우면 별개 상품이 합쳐진다.
+_QTY_UNIT = r"(?:kg|mg|ml|g|l|m|cc|인분|개입|인|입|개|봉지|봉|팩|매|구|캔|병|포|박스|통|ea|p)"
+_QTY = r"(?:약\s*)?\d+(?:\.\d+)?\s*" + _QTY_UNIT + "?"
+_SIZE_PAREN = re.compile(
+    r"\s*\(\s*" + _QTY + r"(?:\s*[*x×+\-/,]\s*" + _QTY + r")*\s*\)\s*$", re.IGNORECASE
+)
 
 # 선두 판촉/채널 브래킷: "[SCO]", "【단독행사】", "《기획》", "<한정>" 등 이름 맨 앞의
 # 대괄호/모난괄호 블록을 앞에서 반복 제거한다(상품명 자체와 무관한 채널·행사 표기).
@@ -193,23 +200,19 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
     stats["held_reviewed_incomplete"] = reviewed_incomplete
     stats["held_flagged"] = held_flagged
 
-    # 그룹핑: (brand, ingredients_raw)
+    # 그룹핑: (brand, ingredients_raw, master 이름). master 이름은 저장·유일키(master_key)와
+    # 똑같이 clean_product_name 결과 그대로 쓴다 — 별도 정규화를 하면 일괄/개별 승격의 master
+    # 수가 달라진다. 끝 용량 괄호만 다른 포장 변형은 한 그룹, 이름이 다르면 다른 master.
     groups: dict[tuple, list] = {}
     for r in rows:
-        groups.setdefault((r[3], r[8]), []).append(r)
+        groups.setdefault((r[3], r[8], clean_product_name(r[4], r[3])), []).append(r)
 
     promoted_masters = 0
     promoted_barcodes = 0
-    for (brand, ingredients_raw), members in groups.items():
-        names = {norm(m[4]) for m in members}
+    for (brand, ingredients_raw, master_name), members in groups.items():
         if len(members) > 1:
             print(f"GROUP [{brand}] x{len(members)}: "
                   + "; ".join(f"{m[4]} ({m[5]}, {m[7]})" for m in members))
-            if len(names) > 1:
-                # 별개 상품 의심 — 보류 (잘못된 병합은 위험, 보류는 안전)
-                print("  -> HOLD: 그룹 내 name 불일치, 승격 보류")
-                stats["group_held"] += len(members)
-                continue
         # 그룹 내 판정 일치 assert (같은 raw → 같은 tokens → 같은 verdict)
         verdicts = {m[13] for m in members}
         if len(verdicts) > 1:
@@ -237,8 +240,6 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             continue
 
         rep = members[0]
-        # 앱 표시명 = 브랜드+상품명. 수집 타이틀에서 앞 브랜드·끝 용량을 떼어 제품명만 저장.
-        master_name = clean_product_name(rep[4], rep[3])
         cur.execute("""
             insert into product_masters
               (brand, name, category, ingredients_raw, ingredients_tokens,
@@ -247,7 +248,7 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                source, source_url, source_checked_at, verified_status)
             values (%s, %s, %s, %s, %s, %s, %s, %s, %s::verdict_enum, %s, %s,
                     %s, %s, now(), 'unverified')
-            on conflict (ingredients_hash) do nothing
+            on conflict (master_key) do nothing
             returning id
         """, (rep[3], master_name, rep[6], rep[8], rep[9], rep[10], rep[11],
               rep[12], rep[13], rep[14], rep[15],
@@ -257,11 +258,11 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             master_id = got[0]
             promoted_masters += 1
         else:
-            # 이미 존재 (재실행 또는 기존 운영 master와 hash 일치)
+            # 이미 존재 (재실행 또는 기존 master와 brand·상품명·원재료 일치)
             cur.execute("""
                 select id, verified_status::text from product_masters
-                where ingredients_hash = md5(%s || '|' || %s)
-            """, (rep[3], rep[8]))
+                where master_key = md5(%s || '|' || %s || '|' || %s)
+            """, (rep[3], master_name, rep[8]))
             master_id, vstatus = cur.fetchone()
             stats["master_existing_reused"] += 1
             if vstatus == "verified":

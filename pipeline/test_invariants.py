@@ -780,20 +780,100 @@ def test_merged_child_barcode_conflict_held():
         conn.rollback()
 
 
-def test_held_group_child_not_promoted():
-    """그룹이 name 불일치로 보류되면 그 멤버의 머지 자식도 승격되지 않는다."""
+def test_same_ingredients_different_name_split():
+    """원재료 표기가 같아도 상품명이 다르면 master 를 따로 만든다(0019). 머지 자식은 부모 master 로."""
     from collections import Counter
     from promote import run_promotion
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         p1 = _promotable_parent(cur, SYN_BC_1, name="이름하나")
         p2 = _promotable_parent(cur, SYN_BC_2, name="이름다름")  # 같은 brand+ingredients, 다른 name
-        child = _merged_child(cur, p1, ean13("990000000002"))
+        child_bc = ean13("990000000002")
+        child = _merged_child(cur, p1, child_bc)
         stats = Counter()
         run_promotion(cur, ids={str(p1), str(p2)}, stats=stats)
-        cur.execute("select stage from collected_products where id=%s", (child,))
-        check("held 그룹 자식 미승격", cur.fetchone()[0] == "parsed")
-        check("그룹 보류 집계", stats.get("group_held", 0) == 2, str(dict(stats)))
+        cur.execute("select stage from collected_products where id = any(%s::uuid[])",
+                    ([str(p1), str(p2), str(child)],))
+        check("이름 다른 두 상품 모두 승격", all(r[0] == "promoted" for r in cur.fetchall()))
+        cur.execute("select barcode, master_id from product_barcodes where barcode = any(%s)",
+                    ([SYN_BC_1, SYN_BC_2, child_bc],))
+        owner = dict(cur.fetchall())
+        check("master 분리(이름별 1개)", owner.get(SYN_BC_1) != owner.get(SYN_BC_2), str(owner))
+        check("머지 자식은 부모 master", owner.get(child_bc) == owner.get(SYN_BC_1), str(owner))
+        check("그룹 보류 없음", stats.get("group_held", 0) == 0, str(dict(stats)))
+        conn.rollback()
+
+
+def test_numbered_variant_name_kept_separate():
+    """숫자가 든 구분자 괄호("(비타민 B12)")는 용량이 아니므로 지우지 않고 master 도 분리한다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        p1 = _promotable_parent(cur, SYN_BC_1, name="음료 (비타민 B12)")
+        p2 = _promotable_parent(cur, SYN_BC_2, name="음료 (비타민 B6)")
+        run_promotion(cur, ids={str(p1), str(p2)}, stats=Counter())
+        cur.execute("""select b.barcode, m.name from product_barcodes b join product_masters m
+                       on m.id = b.master_id where b.barcode = any(%s)""", ([SYN_BC_1, SYN_BC_2],))
+        names = dict(cur.fetchall())
+        check("숫자 구분자 보존(B12)", names.get(SYN_BC_1) == "음료 (비타민 B12)", str(names))
+        check("숫자 구분자 상품 master 분리", names.get(SYN_BC_1) != names.get(SYN_BC_2), str(names))
+        conn.rollback()
+
+
+def test_clean_product_name_quantity_only():
+    """끝 괄호는 안 전체가 수량 문법일 때만 지운다 — 숫자가 섞인 구분자는 보존(DB 불필요)."""
+    from promote import clean_product_name as c
+    keep = ["제품 (제1인산칼슘)", "제품 (제2인산칼슘)", "제품 (비타민 500mg)", "제품 (오메가3 1000mg)",
+            "음료 (비타민 B12)", "크림 (Ver.2)"]
+    for t in keep:
+        check(f"구분자 보존: {t}", c(t, None) == t, c(t, None))
+    strip = {"쫄면 (2인) (462G)": "쫄면", "스프레드 (200)": "스프레드", "캡슐 (5.7G*10입)": "캡슐",
+             "마가렛트 (1박스-8개)": "마가렛트", "젤리 (약 150개입)": "젤리", "두유 (190M*16입)": "두유",
+             "큐티 (27 G)": "큐티", "사탕 (12g x 24개)": "사탕"}
+    for t, want in strip.items():
+        check(f"용량 제거: {t}", c(t, None) == want, c(t, None))
+
+
+def test_batch_and_single_promotion_agree():
+    """일괄 승격과 개별 승격의 master 수가 같다 — 그룹핑과 master_key 가 같은 이름 기준."""
+    from collections import Counter
+    from promote import run_promotion
+    counts = []
+    for mode in ("batch", "single"):
+        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+            cur.execute("begin")
+            p1 = _promotable_parent(cur, SYN_BC_1, name="하얀 설탕 (1KG)")
+            p2 = _promotable_parent(cur, SYN_BC_2, name="하얀설탕 (3KG)")
+            if mode == "batch":
+                run_promotion(cur, ids={str(p1), str(p2)}, stats=Counter())
+            else:
+                run_promotion(cur, id=str(p1), stats=Counter())
+                run_promotion(cur, id=str(p2), stats=Counter())
+            cur.execute("select count(distinct master_id) from product_barcodes where barcode = any(%s)",
+                        ([SYN_BC_1, SYN_BC_2],))
+            counts.append(cur.fetchone()[0])
+            conn.rollback()
+    check("일괄/개별 승격 master 수 일치", counts[0] == counts[1], str(counts))
+
+
+def test_size_variant_same_master():
+    """끝 용량 괄호만 다른 포장 변형은 master 1개 + 바코드 N개로 승격한다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        p1 = _promotable_parent(cur, SYN_BC_1, name="하얀설탕 (1KG)")
+        p2 = _promotable_parent(cur, SYN_BC_2, name="하얀설탕 (3KG)")
+        stats = Counter()
+        run_promotion(cur, ids={str(p1), str(p2)}, stats=stats)
+        cur.execute("select barcode, master_id from product_barcodes where barcode = any(%s)",
+                    ([SYN_BC_1, SYN_BC_2],))
+        owner = dict(cur.fetchall())
+        check("용량 변형 둘 다 연결", len(owner) == 2, str(owner))
+        check("용량 변형은 같은 master", owner.get(SYN_BC_1) == owner.get(SYN_BC_2), str(owner))
+        cur.execute("select name from product_masters where id=%s", (owner.get(SYN_BC_1),))
+        check("master 이름은 용량 뗀 이름", cur.fetchone()[0] == "하얀설탕")
         conn.rollback()
 
 
@@ -889,7 +969,7 @@ def test_parent_barcode_conflict_holds_merged_child():
         cur.execute("select count(*) from product_barcodes where barcode=%s", (SYN_BC_2,))
         check("자식 바코드 미attach", cur.fetchone()[0] == 0)
         # parent 데이터(brand='B', ingredients='밀가루, 설탕')로 만든 shadow master 미존재
-        cur.execute("select count(*) from product_masters where ingredients_hash = md5(%s||'|'||%s)",
+        cur.execute("select count(*) from product_masters where brand=%s and ingredients_raw=%s",
                     ("B", "밀가루, 설탕"))
         check("shadow master 미생성(빈 master 정리)", cur.fetchone()[0] == 0)
         # 기존 다른 master 는 보존
@@ -911,7 +991,9 @@ def main():
               test_upsert_preserves_desk_raw_keys,
               test_clean_product_name, test_merged_child_promotes_with_parent,
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
-              test_held_group_child_not_promoted,
+              test_same_ingredients_different_name_split, test_size_variant_same_master,
+              test_numbered_variant_name_kept_separate, test_batch_and_single_promotion_agree,
+              test_clean_product_name_quantity_only,
               test_merged_child_verified_promotes_via_parent_only,
               test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
               test_parent_barcode_conflict_holds_merged_child]:
