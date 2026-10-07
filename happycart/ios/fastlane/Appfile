@@ -1,0 +1,5 @@
+# App Store Connect 앱 식별자 (iOS bundle id, 모든 flavor 공통).
+app_identifier("kr.happycart")
+
+# Apple Developer 팀 ID (Xcode 프로젝트 DEVELOPMENT_TEAM 과 동일).
+team_id("378589JUNY")
