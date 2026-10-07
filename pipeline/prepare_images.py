@@ -6,7 +6,7 @@
   2. JPEG 로 변환 (PNG 알파는 흰 배경 합성), 512KB 이하로 압축 (Storage 버킷 제한)
   3. pipeline/work/images/products/<barcode>.jpg 로 정리
   4. collected_products.image_path 와 로컬 product_barcodes.image_source_url 갱신
-     - lottemartzetta 는 수집/DB 원본 경로를 _uploads/*.png 로 유지하고,
+     - lz(롯데마트제타) 는 수집/DB 원본 경로를 _uploads/*.png 로 유지하고,
        업로드용 JPG 는 manifest.local_path 에만 기록한다.
   5. 이미지 manifest(work/images/manifest.json) 생성 — Phase 3(upload_prod.py)의 입력
 

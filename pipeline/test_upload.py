@@ -15,8 +15,6 @@ import tempfile
 
 import psycopg
 
-import inspect
-
 import promote
 from common import dsn
 from upload_prod import classify_dryrun, writeback_attachments
@@ -163,15 +161,14 @@ def test_dryrun_classify():
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
 
 
-def test_master_source_is_collected_source():
-    """승격은 product_masters.source 에 collected_products.source 를 그대로 넣는다.
+def test_no_source_phrase_mapping():
+    """승격이 사람이 읽는 문구로 source 를 매핑하지 않는다(어휘 갈라짐 방지).
 
-    예전에는 사람이 읽는 문구로 매핑했으나(SOURCE_BY_COLLECTED) 2026-10-07 운영까지 약어로
-    통일해 항등이 됐다. 다시 문구 매핑이 끼면 운영 값 어휘가 갈라지므로 고정한다.
+    실제로 기록되는 값은 test_invariants.test_master_source_is_collected_source 가
+    cp/kk/lz 각각 승격해 product_masters.source 로 확인한다. 여기서는 되살아나기 쉬운
+    매핑 상수의 부재만 본다.
     """
-    src = inspect.getsource(promote.run_promotion)
-    check("master insert 에 rep[1](collected source) 을 넣는다", "rep[1], rep[17]))" in src)
-    check("문구 매핑 상수가 되살아나지 않았다", not hasattr(promote, "SOURCE_BY_COLLECTED"))
+    check("문구 매핑 상수가 없다", not hasattr(promote, "SOURCE_BY_COLLECTED"))
 
 
 def test_lottemartzetta_image_lookup():
@@ -245,7 +242,7 @@ def test_writeback_row_scoped():
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
-              test_master_source_is_collected_source, test_lottemartzetta_image_lookup,
+              test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:
             t()
