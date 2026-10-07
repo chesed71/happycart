@@ -395,6 +395,254 @@ def test_no_clobber():
     check("no-clobber 가드(UPSERT_SQL)", ok, "reviewed_at is null 조건 존재")
 
 
+def test_flagged_not_candidate():
+    """검토 필요(raw.review_tag='flagged') 행은 실제 CANDIDATE_SELECT 에서 빠진다.
+
+    문자열 검사가 아니라 승격 조건을 전부 갖춘 행으로 후보 쿼리를 돌린다 — 게이트가 빠지거나
+    조건이 바뀌면 깨지도록. 데이터데스크 readyIds 와 같은 조건이어야 한다.
+    """
+    from promote import CANDIDATE_SELECT
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cid = _promotable_parent(cur, "8801037088168", name="N-flagged")
+        cur.execute(CANDIDATE_SELECT)
+        check("태그 없으면 후보에 포함", str(cid) in {str(r[0]) for r in cur.fetchall()})
+
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(coalesce(raw,'{}'::jsonb), '{review_tag}', '"flagged"')
+               where id=%s""",
+            (cid,),
+        )
+        cur.execute(CANDIDATE_SELECT)
+        check("flagged 면 후보에서 빠진다", str(cid) not in {str(r[0]) for r in cur.fetchall()})
+
+        # 누락 사유 태그(바코드없음 등)는 승격을 막지 않는다 — flagged 만 차단 대상.
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(coalesce(raw,'{}'::jsonb), '{review_tag}', '"missing_image"')
+               where id=%s""",
+            (cid,),
+        )
+        cur.execute(CANDIDATE_SELECT)
+        check("missing_image 태그는 후보를 막지 않는다",
+              str(cid) in {str(r[0]) for r in cur.fetchall()})
+        conn.rollback()
+
+
+def test_deleted_not_candidate():
+    """소프트 삭제(raw.deleted_at) 행은 후보에서 빠진다.
+
+    삭제 RPC 는 deleted_at 만 찍고 stage·review_decision 은 그대로 둔다 — 데이터데스크는
+    목록에서 숨기지만 후보 쿼리가 거르지 않으면 지워진 행이 전체 배치에서 승격된다.
+    """
+    from promote import CANDIDATE_SELECT
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cid = _promotable_parent(cur, SYN_BC_2, name="N-deleted")
+        cur.execute(CANDIDATE_SELECT)
+        check("삭제 전엔 후보에 포함", str(cid) in {str(r[0]) for r in cur.fetchall()})
+
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(coalesce(raw,'{}'::jsonb), '{deleted_at}',
+                                     to_jsonb(now()::text))
+               where id=%s""",
+            (cid,),
+        )
+        cur.execute(CANDIDATE_SELECT)
+        check("삭제되면 후보에서 빠진다", str(cid) not in {str(r[0]) for r in cur.fetchall()})
+        conn.rollback()
+
+
+def test_flagged_merged_child_holds_group():
+    """머지 자식이 검토 필요(flagged)면 부모까지 그룹째 보류된다.
+
+    자식만 건너뛰고 부모를 승격하면 부모는 promoted 로 데스크에서 빠지고 자식은 merged_into 라
+    독립 승격도 막혀, 태그를 풀어도 demote 없이는 되살릴 수 없는 상태가 된다.
+    """
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-flagchild")
+        child = _merged_child(cur, parent, SYN_BC_2)
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(raw, '{review_tag}', '"flagged"') where id=%s""",
+            (child,),
+        )
+        stats = Counter()
+        run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
+        cur.execute("select stage from collected_products where id=%s", (parent,))
+        parent_stage = cur.fetchone()[0]
+        check("부모도 승격되지 않는다(그룹 보류)", parent_stage == "judged", f"got {parent_stage}")
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        check("flagged 자식은 promoted 로 넘어가지 않는다", cur.fetchone()[0] != "promoted")
+        cur.execute("select count(*) from product_barcodes where barcode in (%s,%s)",
+                    (SYN_BC_1, SYN_BC_2))
+        check("그룹 바코드가 attach 되지 않는다", cur.fetchone()[0] == 0)
+        check("held_flagged_child 로 센다", stats["held_flagged_child"] == 1,
+              f'got {stats["held_flagged_child"]}')
+
+        # 태그를 풀면 부모·자식이 함께 승격된다 — 보류가 되돌릴 수 있는 상태임을 확인.
+        cur.execute("update collected_products set raw = raw - 'review_tag' where id=%s", (child,))
+        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
+        cur.execute("""select stage from collected_products where id in (%s,%s)
+                       order by (id=%s) desc""", (parent, child, parent))
+        stages = [r[0] for r in cur.fetchall()]
+        check("태그 해제 후 부모·자식 함께 승격", stages == ["promoted", "promoted"],
+              f"got {stages}")
+        conn.rollback()
+
+
+def test_merged_child_lock_blocks_tag_rpc():
+    """머지 자식 잠금이 태그 RPC 를 막는다(flagged 보류 판정의 TOCTOU 차단).
+
+    보류 판정을 잠금 없는 조회로 하면, 판정 직후 데이터데스크가 자식을 flagged 로 바꿔도
+    승격이 그대로 진행된다. promote 가 자식을 먼저 FOR UPDATE 로 잡으므로 그 사이 태그 RPC 는
+    대기해야 한다 — 실제 상수(MERGED_CHILDREN_LOCK)를 그대로 써서 잠금이 빠지면 깨지게 한다.
+    """
+    from promote import MERGED_CHILDREN_LOCK
+    with psycopg.connect(dsn()) as s, s.cursor() as sc:
+        sc.execute("begin")
+        parent = _promotable_parent(sc, SYN_BC_1, name="N-lock-parent")
+        child = _merged_child(sc, parent, SYN_BC_2)
+        s.commit()
+    try:
+        promoter = psycopg.connect(dsn())
+        pc = promoter.cursor()
+        pc.execute("begin")
+        pc.execute(MERGED_CHILDREN_LOCK, ([str(parent)],))
+        locked = {str(r[0]) for r in pc.fetchall()}
+        check("머지 자식이 잠금 대상에 포함", str(child) in locked, f"got {locked}")
+        with psycopg.connect(dsn()) as c2conn, c2conn.cursor() as c2:
+            c2.execute("set statement_timeout='800ms'")
+            try:
+                c2.execute("select public.set_collected_product_review_tag(%s,%s)",
+                           (child, "flagged"))
+                check("자식 잠금 중 태그 RPC 대기", False, "대기 안 함")
+            except psycopg.Error as e:
+                check("자식 잠금 중 태그 RPC 대기", "timeout" in str(e).lower(), str(e)[:40])
+        promoter.rollback()
+        pc.close(); promoter.close()
+    finally:
+        with psycopg.connect(dsn()) as cl, cl.cursor() as cc:
+            cc.execute("delete from collected_products where id in (%s,%s)", (child, parent))
+            cl.commit()
+
+
+def test_held_flagged_counted():
+    """flagged 로 빠진 행이 보류 집계에 잡힌다.
+
+    세지 않으면 CLI 가 승격 0건·보류 0건으로 끝나 운영자가 원인을 알 수 없다.
+    데이터가 모자란 행(held_reviewed_incomplete)과 섞이지 않아야 한다.
+    """
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cid = _promotable_parent(cur, SYN_BC_1, name="N-held-flagged")
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(coalesce(raw,'{}'::jsonb), '{review_tag}', '"flagged"')
+               where id=%s""",
+            (cid,),
+        )
+        stats = Counter()
+        run_promotion(cur, id=str(cid), dry_run=True, stats=stats)
+        check("held_flagged=1", stats["held_flagged"] == 1, f'got {stats["held_flagged"]}')
+        check("데이터 미달로 세지 않는다", stats["held_reviewed_incomplete"] == 0,
+              f'got {stats["held_reviewed_incomplete"]}')
+
+        # 머지 자식은 flagged 가 아니어도 후보에서 빠진다 — held_flagged 로 세면 사유를 오도한다.
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(raw, '{merged_into}',
+                                     '"00000000-0000-0000-0000-000000000001"')
+               where id=%s""",
+            (cid,),
+        )
+        stats2 = Counter()
+        run_promotion(cur, id=str(cid), dry_run=True, stats=stats2)
+        check("머지 자식은 held_flagged 로 세지 않는다", stats2["held_flagged"] == 0,
+              f'got {stats2["held_flagged"]}')
+        conn.rollback()
+
+
+def test_upsert_preserves_desk_raw_keys():
+    """재추출이 검수자가 raw 에 쓴 키를 지우지 않는다.
+
+    태그 RPC 는 reviewed_at 을 세우지 않으므로 flagged 행도 stage='parsed' 면 upsert 대상이다.
+    raw 를 통째로 덮으면 review_tag(승격 차단)·merged_into(머지 자식 제외)가 사라져 게이트가
+    조용히 풀린다. 파이프라인이 만드는 키는 새 값으로 갱신되어야 한다.
+    """
+    from common import upsert_parsed
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            insert into collected_products
+              (source, source_ref, raw, brand, name, size, category, barcode,
+               ingredients_raw, confidence, stage)
+            values ('coupang', 'test-raw-keep', jsonb_build_object(
+                      'review_tag', 'flagged', 'merged_into', '00000000-0000-0000-0000-000000000001',
+                      'merged_barcodes', jsonb_build_array('8801037088168'),
+                      -- 판독불가 초안은 text·confidence 가 null 이다. jsonb_strip_nulls 로
+                      -- 보존하면 재귀라서 이 키들이 사라지고 데이터데스크가 초안을 무효 처리한다.
+                      'ingredients_draft', jsonb_build_object(
+                        'text', null, 'confidence', null, 'status', 'unreadable'),
+                      'deleted_at', '2026-10-06 00:00:00', 'manual', true,
+                      'detail_source_ref', '9355738365',
+                      'category_folder', '옛폴더'),
+                    'B', 'N', '10g', 'cat', null, null, null, 'parsed')
+            returning id
+            """
+        )
+        rid = cur.fetchone()[0]
+        upsert_parsed(conn, [{
+            "source": "coupang", "source_ref": "test-raw-keep",
+            "raw": {"category_folder": "새폴더", "product": {"title": "t"}},
+            "brand": "B2", "name": "N2", "size": "20g", "category": "cat2",
+            "barcode": None, "ingredients_raw": None, "confidence": None,
+        }])
+        cur.execute(
+            """select raw->>'review_tag', raw->>'merged_into', raw->'merged_barcodes'->>0,
+                      raw->'ingredients_draft', raw->>'deleted_at', raw->>'manual',
+                      raw->>'detail_source_ref', raw->>'category_folder', brand, category
+                 from collected_products where id=%s""",
+            (rid,),
+        )
+        (tag, merged, mbc, draft, deleted, manual, dsr,
+         folder, brand, category) = cur.fetchone()
+        check("재추출이 review_tag 를 보존", tag == "flagged", f"got {tag}")
+        check("재추출이 merged_into 를 보존",
+              merged == "00000000-0000-0000-0000-000000000001", f"got {merged}")
+        check("재추출이 merged_barcodes 를 보존", mbc == "8801037088168", f"got {mbc}")
+        check("판독불가 초안의 내부 null 까지 원형 보존",
+              draft == {"text": None, "confidence": None, "status": "unreadable"},
+              f"got {draft}")
+        check("재추출이 deleted_at 을 보존", deleted == "2026-10-06 00:00:00", f"got {deleted}")
+        check("재추출이 manual·detail_source_ref 를 보존",
+              manual == "true" and dsr == "9355738365", f"got {manual}/{dsr}")
+        check("파이프라인 키는 새 값으로 갱신", folder == "새폴더" and brand == "B2"
+              and category == "cat2", f"got {folder}/{brand}/{category}")
+
+        # 기존 raw 에 없던 검수자 키가 null 로 새로 생기지 않는다(strip_nulls).
+        cur.execute(
+            """insert into collected_products
+                 (source, source_ref, raw, brand, name, size, category, stage)
+               values ('coupang', 'test-raw-fresh', '{}'::jsonb, 'B', 'N', '1g', 'c', 'parsed')"""
+        )
+        upsert_parsed(conn, [{
+            "source": "coupang", "source_ref": "test-raw-fresh",
+            "raw": {"category_folder": "f", "product": None},
+            "brand": "B", "name": "N", "size": "1g", "category": "c",
+            "barcode": None, "ingredients_raw": None, "confidence": None,
+        }])
+        cur.execute("""select raw ? 'review_tag' or raw ? 'merged_into' or raw ? 'deleted_at'
+                         from collected_products where source_ref='test-raw-fresh'""")
+        check("없던 검수자 키는 생기지 않는다", cur.fetchone()[0] is False)
+        conn.rollback()
+
+
 def test_clean_product_name():
     """표시명 정제: 선두 판촉/채널 브래킷([SCO],【단독행사】) 제거 + 끝용량·앞브랜드 제거,
     맛/버전 괄호는 보존 (DB 불필요한 순수함수 검증)."""
@@ -629,6 +877,10 @@ def main():
               test_rollback_scope, test_rollback_shared_master,
               test_rollback_shared_barcode, test_rollback_divergent_owner,
               test_rollback_preserves_merged_child, test_no_clobber,
+              test_flagged_not_candidate, test_deleted_not_candidate,
+              test_flagged_merged_child_holds_group, test_merged_child_lock_blocks_tag_rpc,
+              test_held_flagged_counted,
+              test_upsert_preserves_desk_raw_keys,
               test_clean_product_name, test_merged_child_promotes_with_parent,
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
               test_held_group_child_not_promoted,

@@ -81,7 +81,25 @@ values
   (%(source)s, %(source_ref)s, %(raw)s, %(brand)s, %(name)s, %(size)s,
    %(category)s, %(barcode)s, %(ingredients_raw)s, %(confidence)s, 'parsed')
 on conflict (source, source_ref) do update set
-  raw = excluded.raw,
+  -- 데이터데스크 RPC(review-sveltekit/db/*.sql)가 raw 에 jsonb_set 으로 쓰는 키는 보존한다.
+  -- raw 를 통째로 덮으면 미검수(parsed) 행에서 이 키들이 재추출에 사라진다 — 태그·머지 RPC는
+  -- reviewed_at 을 세우지 않으므로 아래 no-clobber 가드에도 걸리지 않는다. review_tag 가 날아가면
+  -- flagged 승격 차단이, merged_into 가 날아가면 머지 자식 제외가 조용히 풀려 중복 승격이 된다.
+  -- 새 RPC 가 raw 에 키를 쓰면 아래 목록에도 추가할 것.
+  -- jsonb_strip_nulls 로 만들면 안 된다 — 재귀라서 보존 대상 안쪽 null 까지 지운다
+  -- (판독불가 초안의 text/confidence 가 null 이라 키째 사라진다). 있는 키만 값 그대로 옮긴다.
+  raw = excluded.raw || coalesce(
+          (select jsonb_object_agg(e.k, e.v)
+             from jsonb_each(collected_products.raw) e(k, v)
+            where e.k = any (array[
+                  'review_tag',         -- 검토 필요·누락 태그
+                  'merged_into',        -- 머지 자식 표시
+                  'merged_barcodes',    -- 부모에 누적된 바코드
+                  'ingredients_draft',  -- AI 원재료 초안
+                  'deleted_at',         -- 소프트 삭제
+                  'manual',             -- 수동 생성 변형 자식
+                  'detail_source_ref'   -- 부모 detail 참조
+                ])), '{}'::jsonb),
   brand = excluded.brand,
   name = excluded.name,
   size = excluded.size,

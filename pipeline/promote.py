@@ -94,8 +94,29 @@ CANDIDATE_SELECT = """
       and confidence is distinct from 'low'
       and review_decision = 'verified'   -- 확인완료 게이트 (§8-1 확정)
       and (raw->>'merged_into') is null  -- 머지 자식은 부모를 통해서만 승격(중복 후보→stage 오염 방지)
+      and coalesce(raw->>'review_tag', '') <> 'flagged'  -- 검토 필요(검수자 플래그)는 승격 제외
+      -- 삭제 RPC는 raw.deleted_at 만 찍고 stage·review_decision 은 그대로 둔다. 데이터데스크는
+      -- 목록에서 숨기지만 여기서 거르지 않으면 지워진 행이 전체 배치에서 승격된다(자식 조회는
+      -- 이미 같은 조건으로 거르고 있었다).
+      and (raw->>'deleted_at') is null
     order by source, source_ref
     for update   -- 후보 행을 트랜잭션 동안 잠가 review RPC와의 경쟁 차단
+"""
+
+# 그룹의 머지 자식을 한 번에 잠그고 태그까지 같이 읽는다. 잠그기 전에 태그만 세어 보면 그 사이
+# 데이터데스크 RPC 가 flagged 를 걸어도 승격이 그대로 진행된다(TOCTOU) — 보류 판정과 실제 승격이
+# 같은 잠긴 행 집합을 보도록 여기서 먼저 잠근다. 태그·검수 RPC 는 행을 FOR UPDATE 로 잡으므로
+# 이 잠금 동안 대기한다. test_invariants.py 가 이 상수를 그대로 써서 경쟁을 재현한다.
+# rejected(자격 박탈)·promoted(이미 승격)·삭제 자식은 제외 — attach RPC 의 머지 대상 탐색 필터와
+# 동일 기준. 단일 홉만 훑는다(자식의 자식은 비대상).
+MERGED_CHILDREN_LOCK = """
+    select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', '')
+    from collected_products
+    where (raw->>'merged_into') = any(%s)
+      and (raw->>'deleted_at') is null
+      and stage not in ('promoted', 'rejected')
+    order by id   -- 교착 회피: 항상 같은 순서로 잠근다
+    for update
 """
 
 
@@ -135,8 +156,22 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             barcode is null or ingredients_raw is null
             or coalesce(array_length(ingredients_tokens, 1), 0) = 0
             or brand is null or name is null or size is null
-            or confidence = 'low')) as reviewed_but_incomplete
-        from collected_products where stage = 'judged'
+            or confidence = 'low')) as reviewed_but_incomplete,
+          -- 오직 검토 필요(flagged) 때문에 후보에서 빠진 행. 세지 않으면 승격 0건·보류 0건으로
+          -- 보여 운영자가 원인을 알 수 없다. 모집단은 CANDIDATE_SELECT 와 같게 두고(머지 자식
+          -- 제외 포함) review_tag 조건만 반대로 둔다 — 다른 사유로 빠진 행이 섞이면 오도한다.
+          count(*) filter (where review_decision = 'verified'
+            and coalesce(raw->>'review_tag', '') = 'flagged'
+            and barcode is not null and ingredients_raw is not null
+            and coalesce(array_length(ingredients_tokens, 1), 0) > 0
+            and brand is not null and name is not null and size is not null
+            and confidence is distinct from 'low') as held_flagged
+        from collected_products
+        -- 모집단은 후보 쿼리·데이터데스크 목록과 같게 둔다. 삭제 행과 머지 자식은 후보가 아니고
+        -- 데스크 목록에도 안 보이므로, 보류로 세면 운영자가 손댈 수 없는 수만 남는다.
+        where stage = 'judged'
+          and (raw->>'deleted_at') is null
+          and (raw->>'merged_into') is null
     """
     held_params = []
     # 후보와 동일하게 스코프(id/ids/source/source_ref)를 반영 — 스코프 승격 시 held
@@ -154,9 +189,10 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
         held_sql += " and source_ref = %s"
         held_params.append(source_ref)
     cur.execute(held_sql, held_params)
-    not_reviewed, reviewed_incomplete = cur.fetchone()
+    not_reviewed, reviewed_incomplete, held_flagged = cur.fetchone()
     stats["held_not_reviewed"] = not_reviewed
     stats["held_reviewed_incomplete"] = reviewed_incomplete
+    stats["held_flagged"] = held_flagged
 
     # 그룹핑: (brand, ingredients_raw)
     groups: dict[tuple, list] = {}
@@ -182,21 +218,23 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             stats["group_verdict_mismatch"] += len(members)
             continue
 
+        # 그룹의 머지 자식을 먼저 잠그고, 이 잠긴 집합 하나로 보류 판정과 승격을 모두 한다.
+        cur.execute(MERGED_CHILDREN_LOCK, ([str(m[0]) for m in members],))
+        children = cur.fetchall()
+
+        # 검토 필요(flagged) 머지 자식이 하나라도 있으면 그룹째 보류한다. 자식만 건너뛰고 부모를
+        # 승격하면 부모는 promoted 로 데스크에서 빠지고 자식은 merged_into 라 독립 승격도 막혀,
+        # 태그를 풀어도 되살릴 수 없는 상태가 된다(demote 를 거쳐야만 복구). 보류는 되돌릴 수 있다.
+        if any(c[4] == "flagged" for c in children):
+            print("  -> HOLD: 머지 자식이 검토 필요(flagged), 그룹 승격 보류")
+            stats["held_flagged_child"] += len(members)
+            continue
+
         if dry_run:
             # 미리보기 — 머지 자식 바코드까지 세어 실측(부모+자식)에 근접시킨다.
             # 충돌/중복은 예측 불가라 실제 붙는 바코드 수의 상한 근사다.
             promoted_masters += 1
-            child_bc = 0
-            for m in members:
-                cur.execute("""
-                    select count(*) from collected_products
-                    where (raw->>'merged_into') = %s
-                      and (raw->>'deleted_at') is null
-                      and stage not in ('promoted', 'rejected')
-                      and barcode is not null
-                """, (str(m[0]),))
-                child_bc += cur.fetchone()[0]
-            promoted_barcodes += len(members) + child_bc
+            promoted_barcodes += len(members) + sum(1 for c in children if c[1] is not None)
             continue
 
         rep = members[0]
@@ -237,18 +275,11 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
         for m in members:
             # 이 멤버(부모) 자신 + 그에 머지된 자식 바코드를 같은 master 로 승격한다.
             # 자식은 사람 검수 필드를 건드리지 않고 stage/promoted_master_id 만 쓴다.
-            # rejected(자격 박탈)·promoted(이미 승격)·삭제 자식은 제외 — attach RPC의
-            # 머지 대상 탐색 필터와 동일 기준. 단일 홉만 훑는다(자식의 자식은 비대상).
+            # 위에서 잠근 children 에서 이 멤버의 자식만 고른다 — 다시 조회하면 잠금 이후 바뀐
+            # 값을 볼 수 있어(판정과 승격이 어긋남) 같은 집합을 그대로 쓴다.
             targets = [(m[0], m[7], m[5])]  # (id, barcode, size)
-            cur.execute("""
-                select id, barcode, size from collected_products
-                where (raw->>'merged_into') = %s
-                  and (raw->>'deleted_at') is null
-                  and stage not in ('promoted', 'rejected')
-                  and barcode is not null
-                for update
-            """, (str(m[0]),))
-            targets.extend(cur.fetchall())
+            targets.extend((c[0], c[1], c[2]) for c in children
+                           if c[3] == str(m[0]) and c[1] is not None)
             # targets[0] = 멤버(부모) 자신, 이후는 머지 자식. 부모 바코드가 이 master 에
             # 못 붙으면(다른 master 충돌) 자식도 붙이지 않는다 — 부모 없이 자식만 달린
             # shadow master 로 같은 상품이 갈라지는 것을 막는다.
