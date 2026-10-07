@@ -116,7 +116,7 @@ def main():
             stats["title_parse_partial"] += 1
 
         rows.append({
-            "source": "kakamuka",
+            "source": "kk",
             "source_ref": pid,
             "raw": {
                 "info": info,
@@ -140,7 +140,7 @@ def main():
     with connect(args.dsn) as conn:
         upsert_parsed(conn, rows)
         with conn.cursor() as cur:
-            cur.execute("select count(*) from collected_products where source='kakamuka'")
+            cur.execute("select count(*) from collected_products where source='kk'")
             print(f"collected_products(kakamuka) = {cur.fetchone()[0]}")
 
 

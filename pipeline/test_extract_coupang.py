@@ -158,9 +158,9 @@ def _output_tree(root):
     _write(os.path.join(root, coupang, "manual_ingredients_direct_page1.json"),
            {"items": [{"productId": "9355738365", "ingredients": "밀가루, 설탕", "confidence": "high"}]})
 
-    _write(os.path.join(root, "롯데마트제타_생수_음료", "products_page1.json"),
+    _write(os.path.join(root, "lz_생수_음료", "products_page1.json"),
            [{"productId": "8801056170073", "zettaSku": "OS8801056170073", "title": "칠성사이다 500ml"}])
-    _write(os.path.join(root, "롯데마트제타_생수_음료", "manual_ingredients_direct_page1.json"),
+    _write(os.path.join(root, "lz_생수_음료", "manual_ingredients_direct_page1.json"),
            [{"productId": "8801056170073", "ingredients": "정제수, 과당"}])
 
     _write(os.path.join(root, "혼재폴더", "products_page1.json"),

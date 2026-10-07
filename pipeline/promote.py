@@ -26,11 +26,10 @@ from collections import Counter
 from common import connect
 from match_enrich import norm
 
-SOURCE_BY_COLLECTED = {
-    "coupang": "쿠팡 크롤링 + 직접 판독",
-    "kakamuka": "kakamuka 크롤링",
-    "lottemartzetta": "롯데마트 제타 크롤링 + 직접 판독",
-}
+# product_masters.source 는 collected_products.source 와 같은 약어 어휘를 쓴다(cp/kk/lz)
+# — 2026-10-07 운영까지 약어로 통일. 예전에는 사람이 읽는 문구로 매핑했으나 이제 항등이라
+# rep[1] 을 그대로 넣는다. 크롤링이 아닌 출처('제조사 라벨 (오뚜기)' 등)는 사람이 직접 적은
+# 값으로 승격 경로를 타지 않으므로 여기서 다루지 않는다.
 
 # 앱 표시명은 브랜드+상품명(brand·size 는 별도 컬럼). 수집 타이틀에서 앞 브랜드와
 # 끝 용량(숫자 든 괄호)을 떼어 product_masters.name 을 제품명만으로 만든다.
@@ -252,7 +251,7 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             returning id
         """, (rep[3], master_name, rep[6], rep[8], rep[9], rep[10], rep[11],
               rep[12], rep[13], rep[14], rep[15],
-              SOURCE_BY_COLLECTED[rep[1]], rep[17]))
+              rep[1], rep[17]))
         got = cur.fetchone()
         if got:
             master_id = got[0]

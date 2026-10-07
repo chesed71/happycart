@@ -16,7 +16,7 @@ from common import connect, dsn
 from tokenizer import tokenize
 
 FIXTURE = "/Users/innovator/Project/HappyCart/happycart/tool/fixtures/seed_products.json"
-REVIEW_GATED_SOURCES = {"lottemartzetta"}
+REVIEW_GATED_SOURCES = {"lz"}
 
 # golden 불일치 허용 목록 — 시드 수작업 토큰의 비일관 케이스. 사유 필수.
 GOLDEN_EXCEPTIONS: dict[str, str] = {

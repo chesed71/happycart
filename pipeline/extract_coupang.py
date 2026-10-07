@@ -89,7 +89,7 @@ def split_zetta_rows(products: dict) -> tuple[dict, set]:
     """load_products 결과를 (쿠팡 행, 제외한 롯데마트제타 productId 집합) 로 가른다.
 
     롯데마트제타 상품 행은 zettaSku 를 갖는다. 그쪽은 crawl_lottemart_zetta.py 가 만드는
-    적재 SQL로 collected_products 에 source='lottemartzetta' 로 들어가므로, 쿠팡 추출이
+    적재 SQL로 collected_products 에 source='lz' 로 들어가므로, 쿠팡 추출이
     가져가면 출처가 뒤바뀐다.
 
     폴더 단위로 판정하면(all) 한 행만 zettaSku 가 빠져도 폴더 전체가 쿠팡 경로로 넘어온다 —
@@ -202,7 +202,7 @@ def build_rows(output_root: str) -> tuple[list[dict], Counter, list[str]]:
                 stats["title_parse_partial"] += 1
 
             row = {
-                "source": "coupang",
+                "source": "cp",
                 "source_ref": pid,
                 "raw": {
                     "category_folder": folder_name,
@@ -255,7 +255,7 @@ def build_rows(output_root: str) -> tuple[list[dict], Counter, list[str]]:
             stats["skipped_orphan_lottemartzetta"] += 1
             continue
         rows.append({
-            "source": "coupang",
+            "source": "cp",
             "source_ref": pid,
             "raw": {
                 "category_folder": detail_folder.get(pid),
@@ -293,7 +293,7 @@ def main():
     with connect(args.dsn) as conn:
         upsert_parsed(conn, rows)
         with conn.cursor() as cur:
-            cur.execute("select count(*) from collected_products where source='coupang'")
+            cur.execute("select count(*) from collected_products where source='cp'")
             print(f"collected_products(coupang) = {cur.fetchone()[0]}")
 
 

@@ -50,7 +50,7 @@ def _fixture(cur, *, stage="judged", barcode="8801037088168", ingredients="밀�
           (source, source_ref, raw, brand, name, size, category, barcode,
            ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
            computed_at, stage, review_decision)
-        values ('coupang', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s, %s, %s,
+        values ('cp', %s, '{}'::jsonb, 'B', 'N', '10g', 'cat', %s, %s, %s,
                 '{밀가루,설탕}', %s::verdict_enum, 'v1.1.0', now(), %s, %s)
         returning id
         """,
@@ -84,7 +84,7 @@ def _merged_child(cur, parent, barcode, *, stage="parsed", review_decision="need
            ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
            computed_at, stage, review_decision,
            bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes)
-        values ('coupang', %s, jsonb_build_object('merged_into', %s::text),
+        values ('cp', %s, jsonb_build_object('merged_into', %s::text),
                 'B', 'N-child', '20g', 'cat', %s, '밀가루, 설탕', %s,
                 '{밀가루,설탕}', 'not_okay'::verdict_enum, 'v1.1.0', now(),
                 %s, %s, '{}', '{}', '{}')
@@ -494,6 +494,33 @@ def test_flagged_merged_child_holds_group():
         conn.rollback()
 
 
+def test_master_source_is_collected_source():
+    """승격이 product_masters.source 에 collected_products.source 를 그대로 넣는다.
+
+    예전에는 사람이 읽는 문구로 매핑했으나(SOURCE_BY_COLLECTED) 2026-10-07 운영까지 약어로
+    통일해 항등이 됐다. 다시 문구 매핑이 끼면 운영 값 어휘가 갈라진다. 구현 문자열이 아니라
+    실제로 기록된 값으로 확인하고, 소스별로(cp/kk/lz) 돌려 한 소스만 검증하는 공백을 막는다.
+    """
+    from collections import Counter
+    from promote import run_promotion
+    for src in ("cp", "kk", "lz"):
+        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+            cur.execute("begin")
+            pid = _promotable_parent(cur, SYN_BC_1, name=f"N-src-{src}")
+            cur.execute("update collected_products set source=%s where id=%s", (src, pid))
+            run_promotion(cur, id=str(pid), dry_run=False, stats=Counter())
+            cur.execute(
+                """select m.source from product_masters m
+                     join collected_products c on c.promoted_master_id = m.id
+                    where c.id = %s""",
+                (pid,),
+            )
+            row = cur.fetchone()
+            check(f"{src} 승격 → master.source={src}", row is not None and row[0] == src,
+                  f"got {row}")
+            conn.rollback()
+
+
 def test_merged_child_lock_blocks_tag_rpc():
     """머지 자식 잠금이 태그 RPC 를 막는다(flagged 보류 판정의 TOCTOU 차단).
 
@@ -582,7 +609,7 @@ def test_upsert_preserves_desk_raw_keys():
             insert into collected_products
               (source, source_ref, raw, brand, name, size, category, barcode,
                ingredients_raw, confidence, stage)
-            values ('coupang', 'test-raw-keep', jsonb_build_object(
+            values ('cp', 'test-raw-keep', jsonb_build_object(
                       'review_tag', 'flagged', 'merged_into', '00000000-0000-0000-0000-000000000001',
                       'merged_barcodes', jsonb_build_array('8801037088168'),
                       -- 판독불가 초안은 text·confidence 가 null 이다. jsonb_strip_nulls 로
@@ -598,7 +625,7 @@ def test_upsert_preserves_desk_raw_keys():
         )
         rid = cur.fetchone()[0]
         upsert_parsed(conn, [{
-            "source": "coupang", "source_ref": "test-raw-keep",
+            "source": "cp", "source_ref": "test-raw-keep",
             "raw": {"category_folder": "새폴더", "product": {"title": "t"}},
             "brand": "B2", "name": "N2", "size": "20g", "category": "cat2",
             "barcode": None, "ingredients_raw": None, "confidence": None,
@@ -629,10 +656,10 @@ def test_upsert_preserves_desk_raw_keys():
         cur.execute(
             """insert into collected_products
                  (source, source_ref, raw, brand, name, size, category, stage)
-               values ('coupang', 'test-raw-fresh', '{}'::jsonb, 'B', 'N', '1g', 'c', 'parsed')"""
+               values ('cp', 'test-raw-fresh', '{}'::jsonb, 'B', 'N', '1g', 'c', 'parsed')"""
         )
         upsert_parsed(conn, [{
-            "source": "coupang", "source_ref": "test-raw-fresh",
+            "source": "cp", "source_ref": "test-raw-fresh",
             "raw": {"category_folder": "f", "product": None},
             "brand": "B", "name": "N", "size": "1g", "category": "c",
             "barcode": None, "ingredients_raw": None, "confidence": None,
@@ -684,7 +711,7 @@ def test_merged_child_promotes_with_parent():
               (source, source_ref, raw, brand, name, size, category, barcode,
                ingredients_raw, confidence, ingredients_tokens, verdict, rule_version,
                computed_at, stage, review_decision)
-            values ('coupang', %s, jsonb_build_object('merged_into', %s::text),
+            values ('cp', %s, jsonb_build_object('merged_into', %s::text),
                     'B', 'N-child', '20g', 'cat', %s, '밀가루, 설탕', 'high',
                     '{밀가루,설탕}', 'not_okay'::verdict_enum, 'v1.1.0', now(),
                     'parsed', 'needs_fix')
@@ -878,7 +905,8 @@ def main():
               test_rollback_shared_barcode, test_rollback_divergent_owner,
               test_rollback_preserves_merged_child, test_no_clobber,
               test_flagged_not_candidate, test_deleted_not_candidate,
-              test_flagged_merged_child_holds_group, test_merged_child_lock_blocks_tag_rpc,
+              test_flagged_merged_child_holds_group, test_master_source_is_collected_source,
+              test_merged_child_lock_blocks_tag_rpc,
               test_held_flagged_counted,
               test_upsert_preserves_desk_raw_keys,
               test_clean_product_name, test_merged_child_promotes_with_parent,
