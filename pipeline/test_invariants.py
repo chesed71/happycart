@@ -780,20 +780,47 @@ def test_merged_child_barcode_conflict_held():
         conn.rollback()
 
 
-def test_held_group_child_not_promoted():
-    """그룹이 name 불일치로 보류되면 그 멤버의 머지 자식도 승격되지 않는다."""
+def test_same_ingredients_different_name_split():
+    """원재료 표기가 같아도 상품명이 다르면 master 를 따로 만든다(0019). 머지 자식은 부모 master 로."""
     from collections import Counter
     from promote import run_promotion
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         p1 = _promotable_parent(cur, SYN_BC_1, name="이름하나")
         p2 = _promotable_parent(cur, SYN_BC_2, name="이름다름")  # 같은 brand+ingredients, 다른 name
-        child = _merged_child(cur, p1, ean13("990000000002"))
+        child_bc = ean13("990000000002")
+        child = _merged_child(cur, p1, child_bc)
         stats = Counter()
         run_promotion(cur, ids={str(p1), str(p2)}, stats=stats)
-        cur.execute("select stage from collected_products where id=%s", (child,))
-        check("held 그룹 자식 미승격", cur.fetchone()[0] == "parsed")
-        check("그룹 보류 집계", stats.get("group_held", 0) == 2, str(dict(stats)))
+        cur.execute("select stage from collected_products where id = any(%s::uuid[])",
+                    ([str(p1), str(p2), str(child)],))
+        check("이름 다른 두 상품 모두 승격", all(r[0] == "promoted" for r in cur.fetchall()))
+        cur.execute("select barcode, master_id from product_barcodes where barcode = any(%s)",
+                    ([SYN_BC_1, SYN_BC_2, child_bc],))
+        owner = dict(cur.fetchall())
+        check("master 분리(이름별 1개)", owner.get(SYN_BC_1) != owner.get(SYN_BC_2), str(owner))
+        check("머지 자식은 부모 master", owner.get(child_bc) == owner.get(SYN_BC_1), str(owner))
+        check("그룹 보류 없음", stats.get("group_held", 0) == 0, str(dict(stats)))
+        conn.rollback()
+
+
+def test_size_variant_same_master():
+    """끝 용량 괄호만 다른 포장 변형은 master 1개 + 바코드 N개로 승격한다."""
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        p1 = _promotable_parent(cur, SYN_BC_1, name="하얀설탕 (1KG)")
+        p2 = _promotable_parent(cur, SYN_BC_2, name="하얀설탕 (3KG)")
+        stats = Counter()
+        run_promotion(cur, ids={str(p1), str(p2)}, stats=stats)
+        cur.execute("select barcode, master_id from product_barcodes where barcode = any(%s)",
+                    ([SYN_BC_1, SYN_BC_2],))
+        owner = dict(cur.fetchall())
+        check("용량 변형 둘 다 연결", len(owner) == 2, str(owner))
+        check("용량 변형은 같은 master", owner.get(SYN_BC_1) == owner.get(SYN_BC_2), str(owner))
+        cur.execute("select name from product_masters where id=%s", (owner.get(SYN_BC_1),))
+        check("master 이름은 용량 뗀 이름", cur.fetchone()[0] == "하얀설탕")
         conn.rollback()
 
 
@@ -889,7 +916,7 @@ def test_parent_barcode_conflict_holds_merged_child():
         cur.execute("select count(*) from product_barcodes where barcode=%s", (SYN_BC_2,))
         check("자식 바코드 미attach", cur.fetchone()[0] == 0)
         # parent 데이터(brand='B', ingredients='밀가루, 설탕')로 만든 shadow master 미존재
-        cur.execute("select count(*) from product_masters where ingredients_hash = md5(%s||'|'||%s)",
+        cur.execute("select count(*) from product_masters where brand=%s and ingredients_raw=%s",
                     ("B", "밀가루, 설탕"))
         check("shadow master 미생성(빈 master 정리)", cur.fetchone()[0] == 0)
         # 기존 다른 master 는 보존
@@ -911,7 +938,7 @@ def main():
               test_upsert_preserves_desk_raw_keys,
               test_clean_product_name, test_merged_child_promotes_with_parent,
               test_rejected_merged_child_not_promoted, test_merged_child_barcode_conflict_held,
-              test_held_group_child_not_promoted,
+              test_same_ingredients_different_name_split, test_size_variant_same_master,
               test_merged_child_verified_promotes_via_parent_only,
               test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
               test_parent_barcode_conflict_holds_merged_child]:

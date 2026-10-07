@@ -4,15 +4,16 @@
   stage='judged' AND barcode AND ingredients_raw/tokens AND brand·name·size NOT NULL
   AND confidence is distinct from 'low'
 
-그룹핑: brand + ingredients_raw 완전 일치 = 같은 master (분리 계획과 동일 기준).
+그룹핑: brand + ingredients_raw + 정규화 상품명(clean_product_name — 끝 용량 괄호 제거)
+완전 일치 = 같은 master. 용량·개수만 다른 포장 변형은 이름이 같아 master 1개 + 바코드 N개로,
+원재료 표기가 같아도 상품명이 다른 상품(맛·종류 차이)은 master 를 따로 만든다(0019).
   - 2건 이상 그룹은 전수 리포트 출력
-  - 그룹 내 정규화 name이 서로 다르면 (변형이 아니라 별개 상품 의심) 승격 보류
 
 승격 대상 = 후보 멤버 + 각 멤버에 머지된 자식 바코드(사람이 바코드 합치기로 '같은
 상품'이라 판단한 관계 근거로 동반 승격). 자식은 사람 검수 필드(review_decision 등)를
 건드리지 않고 stage/promoted_master_id 만 갱신한다.
 
-master upsert는 ingredients_hash(UNIQUE)를 conflict target으로 — 초기 dedupe 전용.
+master upsert는 master_key(brand|name|ingredients_raw, UNIQUE)를 conflict target으로 — 초기 dedupe 전용.
 영속 식별은 uuid (§3.4). verified_status='unverified' — 앱 비노출.
 
 사용: .venv/bin/python promote.py [--dsn DSN] [--dry-run]
@@ -193,23 +194,19 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
     stats["held_reviewed_incomplete"] = reviewed_incomplete
     stats["held_flagged"] = held_flagged
 
-    # 그룹핑: (brand, ingredients_raw)
+    # 그룹핑: (brand, ingredients_raw, 정규화 상품명). 상품명은 master 에 저장할 이름과 같은
+    # 규칙(clean_product_name)으로 떼어 비교한다 — 끝 용량 괄호만 다른 포장 변형은 한 그룹,
+    # 맛·종류가 달라 이름이 다르면 원재료 표기가 같아도 다른 그룹(=다른 master).
     groups: dict[tuple, list] = {}
     for r in rows:
-        groups.setdefault((r[3], r[8]), []).append(r)
+        groups.setdefault((r[3], r[8], norm(clean_product_name(r[4], r[3]))), []).append(r)
 
     promoted_masters = 0
     promoted_barcodes = 0
-    for (brand, ingredients_raw), members in groups.items():
-        names = {norm(m[4]) for m in members}
+    for (brand, ingredients_raw, _name_key), members in groups.items():
         if len(members) > 1:
             print(f"GROUP [{brand}] x{len(members)}: "
                   + "; ".join(f"{m[4]} ({m[5]}, {m[7]})" for m in members))
-            if len(names) > 1:
-                # 별개 상품 의심 — 보류 (잘못된 병합은 위험, 보류는 안전)
-                print("  -> HOLD: 그룹 내 name 불일치, 승격 보류")
-                stats["group_held"] += len(members)
-                continue
         # 그룹 내 판정 일치 assert (같은 raw → 같은 tokens → 같은 verdict)
         verdicts = {m[13] for m in members}
         if len(verdicts) > 1:
@@ -247,7 +244,7 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                source, source_url, source_checked_at, verified_status)
             values (%s, %s, %s, %s, %s, %s, %s, %s, %s::verdict_enum, %s, %s,
                     %s, %s, now(), 'unverified')
-            on conflict (ingredients_hash) do nothing
+            on conflict (master_key) do nothing
             returning id
         """, (rep[3], master_name, rep[6], rep[8], rep[9], rep[10], rep[11],
               rep[12], rep[13], rep[14], rep[15],
@@ -257,11 +254,11 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             master_id = got[0]
             promoted_masters += 1
         else:
-            # 이미 존재 (재실행 또는 기존 운영 master와 hash 일치)
+            # 이미 존재 (재실행 또는 기존 master와 brand·상품명·원재료 일치)
             cur.execute("""
                 select id, verified_status::text from product_masters
-                where ingredients_hash = md5(%s || '|' || %s)
-            """, (rep[3], rep[8]))
+                where master_key = md5(%s || '|' || %s || '|' || %s)
+            """, (rep[3], master_name, rep[8]))
             master_id, vstatus = cur.fetchone()
             stats["master_existing_reused"] += 1
             if vstatus == "verified":

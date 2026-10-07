@@ -32,10 +32,10 @@ echo "==> compat + migrations (seeds included, skip 0011 storage + 0015 split)"
 psql_db < "$REPO_ROOT/supabase/local/00_compat.sql"
 for f in "$REPO_ROOT"/supabase/migrations/*.sql; do
   base="$(basename "$f")"
-  # 0011: storage 스키마 없음 (단독 postgres). 0015 split·0016 upload RPC: 아래에서
-  # 별도 적용 (0016이 0015의 product_masters에 의존하므로 0015 이후여야 한다).
+  # 0011: storage 스키마 없음 (단독 postgres). 0015 split·0016 upload RPC·0019 master_key:
+  # 아래에서 별도 적용 (0016·0019가 0015의 product_masters에 의존하므로 0015 이후여야 한다).
   # 0014(insufficient 제거)는 products 스키마 변경이라 이 루프에서 정상 적용된다.
-  if [[ "$base" =~ ^(0011|0015|0016)_ ]]; then
+  if [[ "$base" =~ ^(0011|0015|0016|0019)_ ]]; then
     continue
   fi
   echo "    $base"
@@ -52,6 +52,9 @@ psql_db < "$REPO_ROOT"/supabase/migrations/0015_*.sql
 
 echo "==> 0016 upload_promoted_product RPC"
 psql_db < "$REPO_ROOT"/supabase/migrations/0016_*.sql
+
+echo "==> 0019 master_key (brand+name+ingredients 유일키)"
+psql_db < "$REPO_ROOT"/supabase/migrations/0019_*.sql
 
 echo "==> collected_products (local-only)"
 psql_db < "$REPO_ROOT/pipeline/sql/collected_products.sql"

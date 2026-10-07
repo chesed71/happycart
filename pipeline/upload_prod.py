@@ -46,8 +46,9 @@ MASTER_COLS = [
 ]
 
 
-def ingredients_hash(brand, ingredients_raw):
-    return hashlib.md5(f"{brand}|{ingredients_raw}".encode()).hexdigest()
+def master_key(brand, name, ingredients_raw):
+    """운영 product_masters.master_key(0019, UNIQUE)와 같은 식 — brand|name|ingredients_raw."""
+    return hashlib.md5(f"{brand}|{name}|{ingredients_raw}".encode()).hexdigest()
 
 
 def _jsonable(v):
@@ -105,8 +106,8 @@ class RestTarget:
             raise RuntimeError(f"{method} {path} → {e.code} {e.read().decode()[:200]}")
 
     def plan_master(self, vals):
-        h = ingredients_hash(vals["brand"], vals["ingredients_raw"])
-        rows = self._req("GET", f"/product_masters?ingredients_hash=eq.{h}&select=id,verified_status")
+        h = master_key(vals["brand"], vals["name"], vals["ingredients_raw"])
+        rows = self._req("GET", f"/product_masters?master_key=eq.{h}&select=id,verified_status")
         if not rows:
             return None, False
         return rows[0]["id"], rows[0]["verified_status"] == "verified"
@@ -127,8 +128,9 @@ class PgTarget:
 
     def plan_master(self, vals):
         with self.conn.cursor() as cur:
-            cur.execute("select id, verified_status::text from product_masters where ingredients_hash = md5(%s||'|'||%s)",
-                        (vals["brand"], vals["ingredients_raw"]))
+            cur.execute("select id, verified_status::text from product_masters "
+                        "where master_key = md5(%s||'|'||%s||'|'||%s)",
+                        (vals["brand"], vals["name"], vals["ingredients_raw"]))
             r = cur.fetchone()
             return (None, False) if not r else (r[0], r[1] == "verified")
 

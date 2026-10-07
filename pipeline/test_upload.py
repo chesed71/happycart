@@ -73,7 +73,7 @@ def test_rpc_insert_and_idempotent():
 def test_rpc_verified_held():
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # 같은 hash의 verified master를 먼저 둔다
+        # 같은 master_key(brand·name·원재료)의 verified master를 먼저 둔다
         m = _master(brand="UPLOADTEST_VER")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
@@ -84,6 +84,25 @@ def test_rpc_verified_held():
         check("RPC verified: barcode 연결 안 함", r["barcodes"] == [])
         cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B1,))
         check("RPC verified: barcode 미생성", cur.fetchone()[0] is False)
+        conn.rollback()
+
+
+def test_rpc_same_ingredients_different_name():
+    """같은 brand+원재료라도 name 이 다르면 별도 master 로 insert(0019 master_key)."""
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        a = dict(_master(brand="UPLOADTEST_NM"), name="오디")
+        b = dict(_master(brand="UPLOADTEST_NM"), name="오미자")
+        ra = _call(cur, a, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+        rb = _call(cur, b, [{"barcode": B2, "size": "1", "image_url": None, "image_source_url": None}])
+        check("이름 다른 master 각각 inserted",
+              ra["master_status"] == "inserted" and rb["master_status"] == "inserted",
+              f'{ra["master_status"]}/{rb["master_status"]}')
+        check("이름 다른 master id 분리", ra["master_id"] != rb["master_id"])
+        # 이름이 같으면 기존 master 재사용(updated)
+        rc = _call(cur, dict(a), [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+        check("같은 이름은 기존 master 재사용", rc["master_id"] == ra["master_id"] and rc["master_status"] == "updated",
+              rc["master_status"])
         conn.rollback()
 
 
@@ -242,6 +261,7 @@ def test_writeback_row_scoped():
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
+              test_rpc_same_ingredients_different_name,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:
