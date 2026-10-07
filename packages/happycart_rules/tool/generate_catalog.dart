@@ -143,6 +143,7 @@ class _Entry {
   final String reasonCode;
   final String label;
   final List<String> aliases;
+  final List<String> excludes;
   final String? riskLevelWire;
   final String? riskReason;
   final String? riskEvidence;
@@ -152,6 +153,7 @@ class _Entry {
     required this.reasonCode,
     required this.label,
     required this.aliases,
+    this.excludes = const [],
     this.riskLevelWire,
     this.riskReason,
     this.riskEvidence,
@@ -212,6 +214,25 @@ List<_Entry> _validateEntries(
       aliases.add(alias);
     }
 
+    // excludes: 선택 필드. 있으면 비지 않은 문자열 리스트여야 한다.
+    final excludesRaw = map['excludes'];
+    final excludes = <String>[];
+    if (excludesRaw != null) {
+      if (excludesRaw is! List || excludesRaw.isEmpty) {
+        throw FormatException(
+          '"$label" 엔트리 "$canonicalKey"의 excludes가 비지 않은 리스트가 아닙니다: $excludesRaw',
+        );
+      }
+      for (final ex in excludesRaw) {
+        if (ex is! String || ex.trim().isEmpty) {
+          throw FormatException(
+            '"$label" 엔트리 "$canonicalKey"의 exclude가 공백 아닌 문자열이 아닙니다: $ex',
+          );
+        }
+        excludes.add(ex);
+      }
+    }
+
     validateRiskMeta(map, isBad: isBad);
 
     entries.add(
@@ -220,6 +241,7 @@ List<_Entry> _validateEntries(
         reasonCode: reasonCode,
         label: entryLabel,
         aliases: aliases,
+        excludes: excludes,
         riskLevelWire: isBad ? map['riskLevel'] as String : null,
         riskReason: isBad ? map['riskReason'] as String : null,
         riskEvidence: isBad ? map['riskEvidence'] as String? : null,
@@ -247,6 +269,11 @@ String _partSource({
       ..writeln('    reasonCode: ${_quote(entry.reasonCode)},')
       ..writeln('    label: ${_quote(entry.label)},')
       ..writeln('    aliases: [${entry.aliases.map(_quote).join(', ')}],');
+    if (entry.excludes.isNotEmpty) {
+      buffer.writeln(
+        '    excludes: [${entry.excludes.map(_quote).join(', ')}],',
+      );
+    }
     if (entry.riskLevelWire != null) {
       buffer
         ..writeln('    riskLevel: RiskLevel.${entry.riskLevelWire},')

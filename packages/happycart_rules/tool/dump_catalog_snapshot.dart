@@ -20,6 +20,7 @@ Map<String, Object?> _entryToMap(IngredientEntry entry) => {
   'reasonCode': entry.reasonCode,
   'label': entry.label,
   'aliases': entry.aliases,
+  if (entry.excludes.isNotEmpty) 'excludes': entry.excludes,
 };
 
 void main(List<String> args) {

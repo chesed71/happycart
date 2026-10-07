@@ -137,6 +137,37 @@ void main() {
     });
   });
 
+  group('excludes 반영', () {
+    Map<String, dynamic> withSugar() => {
+      'schemaVersion': 1,
+      'bad': [
+        {
+          'canonicalKey': 'sugar',
+          'reasonCode': 'refined_sugar',
+          'aliases': ['설탕', '원당'],
+          'excludes': ['환원당'],
+        },
+        {
+          'canonicalKey': 'reducing_x',
+          'reasonCode': 'refined_sugar',
+          'aliases': ['환원당시럽'],
+        },
+      ],
+      'good': [],
+    };
+    test('자기 exclude 에 걸리는 신규 alias 는 무효로 reject', () {
+      expect(
+        verifyNotExcluded([_cand('sugar', '환원당')], withSugar()),
+        isNotEmpty,
+      );
+      expect(verifyNotExcluded([_cand('sugar', '원당가루')], withSugar()), isEmpty);
+    });
+    test('exclude 로 런타임에 매칭 안 되는 다른 키 alias 는 과매칭 아님', () {
+      // '당'은 '환원당시럽'을 커버하지만 sugar 의 exclude '환원당'을 포함하므로 런타임 매칭 없음.
+      expect(verifyNoOvermatch([_cand('sugar', '당')], withSugar()), isEmpty);
+    });
+  });
+
   group('appendApproved', () {
     test('proposedAlias 원문을 해당 엔트리 aliases 뒤에 append', () {
       final cat = _catalog();

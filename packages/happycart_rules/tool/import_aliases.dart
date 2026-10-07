@@ -42,6 +42,23 @@ bool covers(String alias, String tokenLike) {
   return _isENumber(na) ? nt == na : nt.contains(na);
 }
 
+/// 엔트리의 정규화된 excludes(선택 필드). 런타임 `_findFirstMatch` 는 exclude 를 포함한 토큰을
+/// 그 엔트리 매칭에서 빼므로, 검증도 같은 의미로 본다.
+List<String> _normExcludesOf(
+  Map<String, dynamic> catalog,
+  String canonicalKey,
+) {
+  for (final e in allEntries(catalog)) {
+    if (e['canonicalKey'] == canonicalKey) {
+      return [
+        for (final x in (e['excludes'] as List? ?? const []).cast<String>())
+          normalizeIngredientToken(x),
+      ].where((x) => x.isNotEmpty).toList();
+    }
+  }
+  return const [];
+}
+
 /// 매니페스트 `catalogContentSha256` 가 현재 카탈로그 파일 해시와 일치하는지.
 /// 불일치 = 대조 이후 카탈로그가 바뀜(version bump 없는 변경 포함). reject.
 List<String> verifySnapshot(
@@ -121,6 +138,28 @@ List<String> verifyNewUniqueness(
 
 /// 신규 alias 가 다른 canonicalKey 의 alias(기존+신규)를 매칭 규칙상 커버하는지.
 /// 정규화 유일성만으로는 다른 키를 shadow 하는 alias 를 못 잡으므로 별도 검사(2a preflight 승계).
+/// 신규 alias 가 자기 엔트리의 excludes 에 걸려 런타임에 절대 매칭되지 않는지(무효 alias).
+/// 예: sugar(excludes 환원당)에 '환원당' 을 승인하면 검증은 통과해도 실제로는 매칭 0 — reject.
+List<String> verifyNotExcluded(
+  List<Map<String, dynamic>> approved,
+  Map<String, dynamic> catalog,
+) {
+  final errors = <String>[];
+  for (final c in approved) {
+    final k = c['canonicalKey'] as String;
+    final proposed = c['proposedAlias'] as String;
+    final n = normalizeIngredientToken(proposed);
+    for (final ex in _normExcludesOf(catalog, k)) {
+      if (n.contains(ex)) {
+        errors.add(
+          "무효 alias: '$proposed'(key $k)가 같은 엔트리 exclude '$ex' 에 걸려 매칭되지 않음",
+        );
+      }
+    }
+  }
+  return errors;
+}
+
 List<String> verifyNoOvermatch(
   List<Map<String, dynamic>> approved,
   Map<String, dynamic> catalog,
@@ -141,8 +180,12 @@ List<String> verifyNoOvermatch(
   for (final c in approved) {
     final k = c['canonicalKey'] as String;
     final newAlias = c['proposedAlias'] as String;
+    final excludes = _normExcludesOf(catalog, k);
     for (final p in pairs) {
       if (p.key == k) continue; // 같은 키는 과매칭 아님(내부 중복)
+      // 런타임과 같게: 이 엔트리의 exclude 를 포함한 토큰은 매칭되지 않으므로 과매칭도 아니다.
+      final normOther = normalizeIngredientToken(p.value);
+      if (excludes.any(normOther.contains)) continue;
       if (covers(newAlias, p.value)) {
         errors.add(
           "과매칭: 신규 alias '$newAlias'(key $k)가 다른 키 '${p.key}'의 alias '${p.value}' 를 커버",
@@ -299,6 +342,7 @@ void main(List<String> args) {
     ...verifyNormalizedPreview(approved),
     ...verifyNewUniqueness(approved, catalog),
     ...verifyNoOvermatch(approved, catalog),
+    ...verifyNotExcluded(approved, catalog),
   ];
   if (errors.isNotEmpty) {
     stderr.writeln('검증 실패(${errors.length}건) — 반영 중단:');

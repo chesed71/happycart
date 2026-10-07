@@ -5,7 +5,8 @@ import 'good_ingredients.dart';
 ///
 /// v1.1.0 (2026-05-22): refined_sugar 카테고리 신설 — `설탕` alias 1개.
 /// v1.2.0 (2026-07-16): 2a 검토완료 승인 alias 12건 반영 + 황색 KR/US 번호 플립 교정.
-const String ruleVersion = 'v1.2.0';
+/// v1.3.0 (2026-10-07): sugar(정제당)에 '원당' alias 추가 — '원당 100%' 설탕류가 적합으로 나오던 누락 교정.
+const String ruleVersion = 'v1.3.0';
 
 /// 최종 평가 결과 (스펙 §5).
 ///
@@ -221,7 +222,17 @@ String normalizeIngredientToken(String raw) {
 ///
 /// E-number alias 는 단어 경계 비교 (E1400 ≠ E14000) — alias 가 `e\d+` 형태이면
 /// 정확 매칭(token == alias)만 인정한다. 그 외 alias 는 부분 문자열 포함이면 매칭.
+/// 엔트리의 [IngredientEntry.excludes] 중 하나를 포함한 토큰은 이 엔트리 매칭에서 뺀다.
 String? _findFirstMatch(List<String> normalizedTokens, IngredientEntry entry) {
+  if (entry.excludes.isNotEmpty) {
+    final normExcludes = [
+      for (final e in entry.excludes) normalizeIngredientToken(e),
+    ].where((e) => e.isNotEmpty).toList();
+    normalizedTokens = [
+      for (final t in normalizedTokens)
+        if (!normExcludes.any(t.contains)) t,
+    ];
+  }
   for (final alias in entry.aliases) {
     final normAlias = normalizeIngredientToken(alias);
     if (normAlias.isEmpty) continue;
