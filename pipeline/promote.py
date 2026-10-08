@@ -159,7 +159,9 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
     if source_ref:
         rows = [r for r in rows if r[2] == source_ref]
 
-    # 승격 보류 사유별 카운트 (judged인데 조건 미달)
+    # 승격 보류 사유별 카운트 (judged인데 조건 미달). 검토 필요(flagged)와 종료 태그
+    # (missing_*, BLOCKING_TAGS)는 보류 사유가 다르므로(사람이 다시 볼 필요 vs 데이터 자체가
+    # 불완전) 각각 따로 센다 — 합치면 승격 0건·보류 0건으로 보여도 어느 사유인지 알 수 없다.
     held_sql = """
         select
           count(*) filter (where review_decision is distinct from 'verified') as not_reviewed,
@@ -176,7 +178,17 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             and barcode is not null and ingredients_raw is not null
             and coalesce(array_length(ingredients_tokens, 1), 0) > 0
             and brand is not null and name is not null and size is not null
-            and confidence is distinct from 'low') as held_flagged
+            and confidence is distinct from 'low') as held_flagged,
+          -- 종료 태그(missing_barcode/missing_image/missing_ingredients) 때문에 후보에서 빠진
+          -- 행. held_flagged 와 조건은 같고 review_tag 집합만 다르다 — 완결된 부모가 종료
+          -- 태그 하나로 후보에서 빠지면 여기서 세지 않으면 held_flagged 처럼 원인 없이 사라진다.
+          count(*) filter (where review_decision = 'verified'
+            and coalesce(raw->>'review_tag', '') in
+              ('missing_barcode', 'missing_image', 'missing_ingredients')
+            and barcode is not null and ingredients_raw is not null
+            and coalesce(array_length(ingredients_tokens, 1), 0) > 0
+            and brand is not null and name is not null and size is not null
+            and confidence is distinct from 'low') as held_closed
         from collected_products
         -- 모집단은 후보 쿼리·데이터데스크 목록과 같게 둔다. 삭제 행과 머지 자식은 후보가 아니고
         -- 데스크 목록에도 안 보이므로, 보류로 세면 운영자가 손댈 수 없는 수만 남는다.
@@ -200,10 +212,11 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
         held_sql += " and source_ref = %s"
         held_params.append(source_ref)
     cur.execute(held_sql, held_params)
-    not_reviewed, reviewed_incomplete, held_flagged = cur.fetchone()
+    not_reviewed, reviewed_incomplete, held_flagged, held_closed = cur.fetchone()
     stats["held_not_reviewed"] = not_reviewed
     stats["held_reviewed_incomplete"] = reviewed_incomplete
     stats["held_flagged"] = held_flagged
+    stats["held_closed"] = held_closed
 
     # 그룹핑: (brand, ingredients_raw, master 이름). master 이름은 저장·유일키(master_key)와
     # 똑같이 clean_product_name 결과 그대로 쓴다 — 별도 정규화를 하면 일괄/개별 승격의 master
@@ -359,6 +372,8 @@ def main():
         # ── 검증 + 리포트 ──
         print(f"\npromoted: masters +{promoted_masters}, barcodes +{promoted_barcodes}")
         print(dict(stats))
+        print(f"  held_flagged(검토 필요 보류)={stats['held_flagged']} "
+              f"held_closed(종료 태그 보류)={stats['held_closed']}")
         with conn.cursor() as c2:
             c2.execute("""
                 select source, coalesce(confidence, '(extracted)') conf, count(*)
