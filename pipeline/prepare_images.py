@@ -3,6 +3,7 @@
 승격된(stage='promoted', 바코드 확정) 행에 한해:
   1. 소스 이미지를 우선순위대로 찾는다
      쿠팡 detail(패키지 정면) > Koreannet images_page* > kakamuka detail > (쿠팡 CDN 썸네일은 보류)
+     Koreannet 신규 행(kn)은 raw.kn.image_url(photoView 앞면 사진)을 내려받는다(수동 업로드가 먼저)
   2. JPEG 로 변환 (PNG 알파는 흰 배경 합성), 512KB 이하로 압축 (Storage 버킷 제한)
   3. pipeline/work/images/products/<barcode>.jpg 로 정리
   4. collected_products.image_path 와 로컬 product_barcodes.image_source_url 갱신
@@ -120,20 +121,28 @@ def _find_source_image(source: str, source_ref: str, raw: dict, image_path: str 
             found = _existing_image(path)
             if found:
                 return found
+    elif source == "kn":
+        # Koreannet 신규 행: photoView 앞면 사진(250px)을 내려받는다. 수동 업로드는 호출부에서 먼저 본다.
+        return _http_url((raw.get("kn") or {}).get("image_url"))
     return None
+
+
+def _fetch_url(url: str) -> bytes:
+    """http(s) 이미지를 내려받는다 (테스트는 이 함수를 가짜로 바꾼다)."""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh)"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read()
 
 
 def _to_jpeg(path: str) -> bytes:
     """이미지를 JPEG 로 변환 (알파는 흰 배경 합성), 512KB 이내로 압축.
-    path 가 http(s) URL 이면 먼저 내려받는다 (CDN 대표 썸네일 지원)."""
+    path 가 http(s) URL 이면 먼저 내려받는다 (CDN 대표 썸네일·Koreannet 앞면 사진 지원)."""
     from PIL import Image
 
     if path.startswith(("http://", "https://")):
-        import urllib.request
-
-        req = urllib.request.Request(path, headers={"User-Agent": "Mozilla/5.0 (Macintosh)"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            img = Image.open(io.BytesIO(r.read()))
+        img = Image.open(io.BytesIO(_fetch_url(path)))
     else:
         img = Image.open(path)
     if img.mode in ("RGBA", "LA", "P"):
@@ -199,6 +208,7 @@ def main():
                 or _http_url(product.get("source_image_url"))
                 or _http_url(product.get("image"))
                 or _http_url(zetta.get("productImageUrl"))
+                or _http_url((raw.get("kn") or {}).get("image_url"))
                 or source_url
             )
 
