@@ -416,7 +416,7 @@ def test_flagged_not_candidate():
         cur.execute(CANDIDATE_SELECT)
         check("flagged 면 후보에서 빠진다", str(cid) not in {str(r[0]) for r in cur.fetchall()})
 
-        # 누락 사유 태그(바코드없음 등)는 승격을 막지 않는다 — flagged 만 차단 대상.
+        # 종료 태그(missing_*)도 후보에서 빠진다(2026-10-08 레인 설계)
         cur.execute(
             """update collected_products
                  set raw = jsonb_set(coalesce(raw,'{}'::jsonb), '{review_tag}', '"missing_image"')
@@ -424,8 +424,8 @@ def test_flagged_not_candidate():
             (cid,),
         )
         cur.execute(CANDIDATE_SELECT)
-        check("missing_image 태그는 후보를 막지 않는다",
-              str(cid) in {str(r[0]) for r in cur.fetchall()})
+        check("missing_image 태그면 후보에서 빠진다",
+              str(cid) not in {str(r[0]) for r in cur.fetchall()})
         conn.rollback()
 
 
@@ -477,6 +477,47 @@ def test_flagged_merged_child_holds_group():
         check("부모도 승격되지 않는다(그룹 보류)", parent_stage == "judged", f"got {parent_stage}")
         cur.execute("select stage from collected_products where id=%s", (child,))
         check("flagged 자식은 promoted 로 넘어가지 않는다", cur.fetchone()[0] != "promoted")
+        cur.execute("select count(*) from product_barcodes where barcode in (%s,%s)",
+                    (SYN_BC_1, SYN_BC_2))
+        check("그룹 바코드가 attach 되지 않는다", cur.fetchone()[0] == 0)
+        check("held_flagged_child 로 센다", stats["held_flagged_child"] == 1,
+              f'got {stats["held_flagged_child"]}')
+
+        # 태그를 풀면 부모·자식이 함께 승격된다 — 보류가 되돌릴 수 있는 상태임을 확인.
+        cur.execute("update collected_products set raw = raw - 'review_tag' where id=%s", (child,))
+        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
+        cur.execute("""select stage from collected_products where id in (%s,%s)
+                       order by (id=%s) desc""", (parent, child, parent))
+        stages = [r[0] for r in cur.fetchall()]
+        check("태그 해제 후 부모·자식 함께 승격", stages == ["promoted", "promoted"],
+              f"got {stages}")
+        conn.rollback()
+
+
+def test_closed_merged_child_holds_group():
+    """머지 자식이 종료 태그(missing_barcode)면 부모까지 그룹째 보류된다.
+
+    flagged 와 같은 집합(BLOCKING_TAGS)으로 판정해야 한다 — 종료 태그 자식만 건너뛰고 부모를
+    승격하면 부모는 promoted 로 데스크에서 빠지고 자식은 merged_into 라 독립 승격도 막힌다.
+    """
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-closedchild")
+        child = _merged_child(cur, parent, SYN_BC_2)
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(raw, '{review_tag}', '"missing_barcode"') where id=%s""",
+            (child,),
+        )
+        stats = Counter()
+        run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
+        cur.execute("select stage from collected_products where id=%s", (parent,))
+        parent_stage = cur.fetchone()[0]
+        check("부모도 승격되지 않는다(그룹 보류)", parent_stage == "judged", f"got {parent_stage}")
+        cur.execute("select stage from collected_products where id=%s", (child,))
+        check("missing_barcode 자식은 promoted 로 넘어가지 않는다", cur.fetchone()[0] != "promoted")
         cur.execute("select count(*) from product_barcodes where barcode in (%s,%s)",
                     (SYN_BC_1, SYN_BC_2))
         check("그룹 바코드가 attach 되지 않는다", cur.fetchone()[0] == 0)
@@ -592,6 +633,34 @@ def test_held_flagged_counted():
         run_promotion(cur, id=str(cid), dry_run=True, stats=stats2)
         check("머지 자식은 held_flagged 로 세지 않는다", stats2["held_flagged"] == 0,
               f'got {stats2["held_flagged"]}')
+        conn.rollback()
+
+
+def test_closed_parent_counted_as_held():
+    """종료 태그(missing_image)로 빠진 행이 held_closed 로 집계되고 held_flagged 와 섞이지 않는다.
+
+    BLOCKING_TAGS 로 후보 제외 범위가 missing_* 까지 넓어진 뒤, 완결된(judged+verified) 부모가
+    종료 태그 하나로 후보에서 빠지면 세지 않으면 held_flagged 처럼 승격 0건·보류 0건으로 보여
+    운영자가 원인을 알 수 없다.
+    """
+    from collections import Counter
+    from promote import run_promotion
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cid = _promotable_parent(cur, SYN_BC_1, name="N-held-closed")
+        cur.execute(
+            """update collected_products
+                 set raw = jsonb_set(coalesce(raw,'{}'::jsonb), '{review_tag}', '"missing_image"')
+               where id=%s""",
+            (cid,),
+        )
+        stats = Counter()
+        run_promotion(cur, id=str(cid), dry_run=True, stats=stats)
+        cur.execute("select stage from collected_products where id=%s", (cid,))
+        check("부모는 승격되지 않는다(judged 유지)", cur.fetchone()[0] == "judged")
+        check("held_closed=1", stats["held_closed"] == 1, f'got {stats["held_closed"]}')
+        check("held_flagged 와 섞이지 않는다", stats["held_flagged"] == 0,
+              f'got {stats["held_flagged"]}')
         conn.rollback()
 
 
@@ -984,8 +1053,10 @@ def main():
               test_rollback_scope, test_rollback_shared_master,
               test_rollback_shared_barcode, test_rollback_divergent_owner,
               test_rollback_preserves_merged_child, test_no_clobber,
-              test_flagged_not_candidate, test_deleted_not_candidate,
-              test_flagged_merged_child_holds_group, test_master_source_is_collected_source,
+              test_flagged_not_candidate, test_closed_parent_counted_as_held,
+              test_deleted_not_candidate,
+              test_flagged_merged_child_holds_group, test_closed_merged_child_holds_group,
+              test_master_source_is_collected_source,
               test_merged_child_lock_blocks_tag_rpc,
               test_held_flagged_counted,
               test_upsert_preserves_desk_raw_keys,
