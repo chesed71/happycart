@@ -150,6 +150,28 @@ class PrepareImagesSourceTest(unittest.TestCase):
         self.assertEqual(manifest, [])
         self.assertEqual(self.fetched, [])
 
+    def test_kn_download_failure_skips_row_and_continues(self):
+        other = "8801117788704"
+        other_url = KN_URL.replace(KN_REF, other)
+
+        def flaky_fetch(url):
+            self.fetched.append(url)
+            if url == KN_URL:
+                raise OSError("HTTP Error 404")
+            return _png_bytes()
+
+        with mock.patch.object(prepare_images, "_fetch_url", flaky_fetch):
+            manifest, updates, barcode_updates = self._run([
+                ("kn", KN_REF, KN_REF, {"kn": {"image_url": KN_URL}}, None, None),
+                ("kn", other, other, {"kn": {"image_url": other_url}}, None, None),
+            ])
+        # 실패한 행은 건너뛰고(manifest·image_path 갱신 없음) 다음 행은 처리한다.
+        self.assertEqual(self.fetched, [KN_URL, other_url])
+        self.assertEqual([e["barcode"] for e in manifest], [other])
+        self.assertEqual(updates, [(os.path.join(self.out_dir, f"{other}.jpg"), "kn", other)])
+        self.assertEqual(barcode_updates, [(other_url, other)])
+        self.assertFalse(os.path.exists(os.path.join(self.out_dir, f"{KN_REF}.jpg")))
+
     def test_cp_row_unchanged_uses_upsized_cdn_thumbnail(self):
         cdn = "https://thumbnail6.coupangcdn.com/thumbnails/remote/230x230ex/image/a.jpg"
         raw = {"product": {"image": cdn}, "kn": {"image_url": KN_URL}}
