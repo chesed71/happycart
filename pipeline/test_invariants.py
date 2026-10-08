@@ -520,6 +520,15 @@ def test_closed_merged_child_holds_group():
         check("missing_barcode 자식은 promoted 로 넘어가지 않는다", cur.fetchone()[0] != "promoted")
         check("held_flagged_child 로 센다", stats["held_flagged_child"] == 1,
               f'got {stats["held_flagged_child"]}')
+
+        # 태그를 풀면 부모·자식이 함께 승격된다 — 보류가 되돌릴 수 있는 상태임을 확인.
+        cur.execute("update collected_products set raw = raw - 'review_tag' where id=%s", (child,))
+        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
+        cur.execute("""select stage from collected_products where id in (%s,%s)
+                       order by (id=%s) desc""", (parent, child, parent))
+        stages = [r[0] for r in cur.fetchall()]
+        check("태그 해제 후 부모·자식 함께 승격", stages == ["promoted", "promoted"],
+              f"got {stages}")
         conn.rollback()
 
 
