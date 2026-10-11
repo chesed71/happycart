@@ -157,6 +157,13 @@ MERGED_CHILDREN_LOCK = """
 """
 
 
+# 승격 실행끼리 직렬화하는 트랜잭션 advisory lock 키(고정값, 다른 advisory lock 사용처와 겹치지 않음).
+# 후보 잠금이 범위로 좁아져 서로 다른 배치가 동시에 돌 수 있는데, 두 배치가 같은 신규 master 를
+# 반대 순서로 INSERT 하면 master_key unique 대기로 교착한다. advisory lock 은 행을 잠그지 않아
+# 범위 밖 검수 저장은 막지 않는다.
+PROMOTE_ADVISORY_LOCK_KEY = 7_204_001_001
+
+
 def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                   dry_run=False, stats=None):
     """승격 로직 본체 — 주어진 커서로 실행하고 commit 하지 않는다(호출자가 commit/rollback).
@@ -174,6 +181,7 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
     else:
         id_set = None
 
+    cur.execute("select pg_advisory_xact_lock(%s)", (PROMOTE_ADVISORY_LOCK_KEY,))
     cand_sql, cand_params = candidate_query(
         id=id, ids=id_set, source=source, source_ref=source_ref)
     cur.execute(cand_sql, cand_params)

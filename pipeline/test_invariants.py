@@ -310,6 +310,72 @@ def test_promote_scoped_lock_allows_other_review():
             cl.commit()
 
 
+def test_promote_runs_serialize_on_advisory_lock():
+    """서로 다른 id 배치의 두 승격 실행은 같은 신규 master A·B 를 반대 순서로 처리해도 교착하지 않고
+    advisory lock 으로 직렬화된다(연결2는 연결1 커밋 전까지 advisory 대기)."""
+    import threading
+    import time
+    from promote import run_promotion
+    brand = "SERIALTEST"
+    bcs = [ean13(f"99000000030{i}") for i in range(4)]
+    ids = []
+    with connect_test(source_dsn()) as s, s.cursor() as sc:
+        sc.execute("begin")
+        # (source_ref, master 이름, 바코드): 배치1 은 A→B, 배치2 는 B→A 순으로 정렬된다
+        for ref, nm, bc in [("ser-1-a", "SER-A", bcs[0]), ("ser-1-b", "SER-B", bcs[1]),
+                            ("ser-2-a", "SER-B", bcs[2]), ("ser-2-b", "SER-A", bcs[3])]:
+            pid = _promotable_parent(sc, bc, name=nm)
+            sc.execute("update collected_products set source_ref=%s, brand=%s where id=%s",
+                       (ref, brand, pid))
+            ids.append(pid)
+        s.commit()
+    batch1, batch2 = ids[:2], ids[2:]
+    c1 = connect_test(source_dsn())
+    c2 = connect_test(source_dsn())
+    try:
+        cur1 = c1.cursor()
+        cur1.execute("begin")
+        run_promotion(cur1, ids=[str(x) for x in batch1])   # 커밋하지 않고 둔다
+        err = []
+
+        def run2():
+            try:
+                cur2 = c2.cursor()
+                cur2.execute("begin")
+                run_promotion(cur2, ids=[str(x) for x in batch2])
+                c2.commit()
+            except Exception as e:  # noqa: BLE001
+                err.append(str(e)[:80])
+                c2.rollback()
+
+        t = threading.Thread(target=run2)
+        t.start()
+        waiting = False
+        with connect_test(source_dsn(), autocommit=True) as mon, mon.cursor() as mc:
+            deadline = time.time() + 10
+            while time.time() < deadline and not waiting:
+                mc.execute("select 1 from pg_locks where pid=%s and locktype='advisory' and not granted",
+                           (c2.info.backend_pid,))
+                waiting = mc.fetchone() is not None
+                time.sleep(0.05)
+        check("승격 실행2가 advisory lock 대기", waiting)
+        c1.commit()
+        t.join(30)
+        check("승격 실행2 교착 없이 종료", not t.is_alive() and not err, str(err))
+        with connect_test(source_dsn()) as v, v.cursor() as vc:
+            vc.execute("select count(*) from collected_products where id = any(%s) and stage='promoted'", (ids,))
+            check("두 배치 행 모두 promoted", vc.fetchone()[0] == 4)
+            vc.execute("select count(*) from product_masters where brand=%s", (brand,))
+            check("master 는 A·B 두 개뿐", vc.fetchone()[0] == 2)
+    finally:
+        c1.rollback(); c2.rollback(); c1.close(); c2.close()
+        with connect_test(source_dsn()) as cl, cl.cursor() as cc:
+            cc.execute("delete from collected_products where id = any(%s)", (ids,))
+            cc.execute("delete from product_barcodes where barcode = any(%s)", (bcs,))
+            cc.execute("delete from product_masters where brand=%s", (brand,))
+            cl.commit()
+
+
 def test_rollback_shared_master():
     """rollback 실제 실행: verified/non-verified 가 공유한 master 에서 verified 보존."""
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
@@ -1245,6 +1311,7 @@ def main():
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
               test_candidate_query_unscoped_equals_constant,
               test_promote_scoped_lock_allows_other_review,
+              test_promote_runs_serialize_on_advisory_lock,
               test_rollback_scope, test_rollback_shared_master,
               test_rollback_shared_barcode, test_rollback_divergent_owner,
               test_rollback_preserves_merged_child, test_no_clobber,
