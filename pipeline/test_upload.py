@@ -648,6 +648,23 @@ def test_fetch_scope_all():
     _with_fetch_seed(body)
 
 
+def test_fetch_scope_ids_empty():
+    def body(conn, mids, rows):
+        masters, bcs, skipped = fetch_promoted(conn, ids=[])
+        check("fetch ids=[]: master 없음(기본 범위로 넓어지지 않음)",
+              masters == {} and bcs == {} and skipped == [], str(list(masters)))
+    _with_fetch_seed(body)
+
+
+def test_cli_ids_empty():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for val in ("", ","):
+        r = subprocess.run([sys.executable, os.path.join(here, "upload_prod.py"), "--ids", val],
+                           capture_output=True, text=True, cwd=here, timeout=60)
+        check(f"CLI --ids {val!r}: 비정상 종료·DB 접속 전", r.returncode == 2 and "--ids" in r.stderr,
+              f"{r.returncode} {r.stderr[-150:]}")
+
+
 def test_cli_ids_all_exclusive():
     here = os.path.dirname(os.path.abspath(__file__))
     r = subprocess.run([sys.executable, os.path.join(here, "upload_prod.py"), "--ids",
@@ -668,7 +685,7 @@ def main():
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify,
               test_fetch_scope_default, test_fetch_scope_ids, test_fetch_scope_all,
-              test_cli_ids_all_exclusive]:
+              test_fetch_scope_ids_empty, test_cli_ids_all_exclusive, test_cli_ids_empty]:
         try:
             t()
         except Exception as e:  # noqa

@@ -83,8 +83,10 @@ def fetch_promoted(src, *, ids=None, all_=False):
     skipped: ids 중 승격이 아니거나 없는 id (문자열)."""
     skipped: list = []
     with src.cursor() as cur:
-        if ids:
+        if ids is not None:
             ids = [str(i) for i in ids]
+            if not ids:
+                return {}, {}, []
             cur.execute("""
                 select id::text, promoted_master_id from collected_products
                 where id = any(%s::uuid[]) and stage = 'promoted' and promoted_master_id is not null
@@ -394,6 +396,8 @@ def _uuid_list(text):
                 out.append(str(uuid.UUID(part)))
             except ValueError:
                 raise argparse.ArgumentTypeError(f"uuid 형식이 아님: {part}")
+    if not out:
+        raise argparse.ArgumentTypeError("--ids 에 uuid 가 하나도 없음")
     return out
 
 
