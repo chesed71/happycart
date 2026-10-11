@@ -202,11 +202,16 @@ class PgTarget:
             return cur.fetchall()
 
     def upload(self, master, barcodes):
-        with self.conn.cursor() as cur:
-            cur.execute("select public.upload_promoted_product(%s::jsonb, %s::jsonb)",
-                        (json.dumps(master), json.dumps(barcodes)))
-            res = cur.fetchone()[0]
-        self.conn.commit()
+        # 실패하면 rollback 해 연결을 실패 트랜잭션 상태로 남기지 않는다 — 남기면 뒤 master 가 모두 실패한다.
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("select public.upload_promoted_product(%s::jsonb, %s::jsonb)",
+                            (json.dumps(master), json.dumps(barcodes)))
+                res = cur.fetchone()[0]
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
         return res
 
 
@@ -286,13 +291,56 @@ def enrich_images(entries, manifest, uploader, stats, dry_run):
 
 
 def writeback_attachments(cur, attach_rows):
-    """붙은 행(id)에만 prod_master_id 기록. barcode가 아니라 행 식별자(id) 기준이라,
-    같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
-    attach_rows: [(prod_master_id, collected_id, local_master_id), ...]"""
-    for prod_id, cid, local_id in attach_rows:
+    """붙은 행에만 prod_master_id 기록하고 실제로 쓴 행 수를 돌려준다.
+    행 식별자(id) 기준이라 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
+    업로드가 읽은 승격 세대(promoted_at)와 바코드가 지금도 같을 때만 쓴다 — 업로드 도중 행이
+    취소·수정·재승격됐으면 옛 응답이 새 세대를 채우지 않는다.
+    attach_rows: [(prod_master_id, collected_id, local_master_id, promoted_at, barcode), ...]"""
+    written = 0
+    for prod_id, cid, local_id, promoted_at, barcode in attach_rows:
         cur.execute("""update collected_products set prod_master_id=%s
-                       where id=%s and promoted_master_id=%s and stage='promoted'""",
-                    (prod_id, cid, local_id))
+                       where id=%s and promoted_master_id=%s and stage='promoted'
+                         and promoted_at=%s and barcode=%s""",
+                    (prod_id, cid, local_id, promoted_at, barcode))
+        written += cur.rowcount
+    return written
+
+
+ATTACHED_RESULTS = ("inserted", "existing", "exists")
+
+
+def receipt_rows(local_id, entries, res):
+    """RPC 결과 → 영수증 행 목록(순수 함수). entries 는 fetch_promoted 의 그 master 바코드 항목.
+    바코드 결과: master inserted+바코드 inserted → inserted, master existing+바코드 inserted → existing,
+    exists → exists, conflict → conflict, 결과 목록에 없으면 master 결과(보류 사유).
+    prod_master_id 는 붙은 경우(inserted·existing·exists)에만 채운다."""
+    bc_status = {}
+    for b in res.get("barcodes") or []:
+        bc_status.setdefault(b["barcode"], b["status"])  # 같은 바코드 중복 입력이면 첫 결과
+    m_status, m_id = res["master_status"], res.get("master_id")
+    out = []
+    for e in entries:
+        s = bc_status.get(e["barcode"])
+        if s == "inserted":
+            result = "existing" if m_status == "existing" else "inserted"
+        elif s in ("exists", "conflict"):
+            result = s
+        else:
+            result = m_status
+        out.append({"collected_id": e["collected_id"], "local_master_id": local_id,
+                    "barcode": e["barcode"], "promoted_at": e["promoted_at"], "result": result,
+                    "prod_master_id": m_id if result in ATTACHED_RESULTS and m_id else None})
+    return out
+
+
+def insert_receipts(cur, run_id, rows, error=None):
+    for r in rows:
+        cur.execute("""insert into upload_receipts
+                         (run_id, collected_id, local_master_id, barcode, promoted_at, result,
+                          prod_master_id, error)
+                       values (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (run_id, r["collected_id"], r["local_master_id"], r["barcode"], r["promoted_at"],
+                     r["result"], r["prod_master_id"], error))
 
 
 def classify_dryrun(target, vals, barcodes):
@@ -326,9 +374,15 @@ def classify_dryrun(target, vals, barcodes):
 
 def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=None,
                uploader=None, run_id=None):
-    """승격분을 운영에 올리고 집계(Counter)를 돌려준다. run_id 는 아직 쓰지 않는다."""
+    """승격분을 운영에 올리고 집계(Counter)를 돌려준다.
+
+    master 하나의 RPC 가 끝나면 바로 LOCAL 트랜잭션 하나로 영수증·연결 기록(prod_master_id)·
+    Storage image_url 반영을 커밋한다 — 중간에 멈춰도 운영에 반영된 master 의 기록이 남는다.
+    RPC 가 실패하면 그 master 의 바코드마다 error 영수증을 커밋하고 다음 master 로 넘어간다.
+    dry-run 은 영수증·기록을 쓰지 않는다."""
     stats = Counter()
-    image_writeback = []  # (barcode, image_url) — Storage 업로드 성공분, 로컬에 되쓰기
+    if run_id is None:
+        run_id = datetime.now().strftime("%Y%m%dT%H%M%S.%f")
     if manifest is None:
         manifest = load_image_manifest()
     if uploader is None:
@@ -343,25 +397,37 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
         print("업로드할 승격분 없음")
         return stats
     print(f"승격 master {len(masters)} / barcode {sum(len(v) for v in bc_by_master.values())}"
-          + (" [DRY-RUN]" if dry_run else ""))
+          + (" [DRY-RUN]" if dry_run else f" [run_id {run_id}]"))
     # prod_master_id는 collected_products(행=바코드) 단위로, **실제로 운영에 붙은
-    # 바코드(inserted/exists) 행에만** 기록한다. verified_held / conflict / empty_held
-    # 행은 운영에 올라가지 않았으므로 기록하지 않는다(=미매핑, 수동 처리 대상).
-    # → prod_master_id is null & stage='promoted' = "아직 운영 미반영"으로 조회 가능.
-    attach_rows = []  # (prod_master_id, collected_id, local_master_id) — 붙은 행만
+    # 바코드(inserted/existing/exists) 행에만** 기록한다. 보류·conflict 행은 운영에 올라가지
+    # 않았으므로 기록하지 않는다(=미매핑, 영수증에 사유가 남는다).
     for local_id, vals in masters.items():
         entries = bc_by_master.get(local_id, [])
         # image_url 이 비어있는 바코드는 정리된 JPEG 를 Storage 에 올려 채운다.
-        image_writeback += enrich_images(entries, manifest, uploader, stats, dry_run)
+        image_writeback = enrich_images(entries, manifest, uploader, stats, dry_run)
         payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
                    for e in entries]
-        bc_to_cids = {}
-        for e in entries:
-            bc_to_cids.setdefault(e["barcode"], []).append(e["collected_id"])
-        res = classify_dryrun(target, vals, payload) if dry_run else target.upload(vals, payload)
+        if dry_run:
+            res = classify_dryrun(target, vals, payload)
+        else:
+            try:
+                res = target.upload(vals, payload)
+            except Exception as ex:  # noqa: BLE001 — 한 master 실패가 다음 master 를 막지 않게
+                msg = str(ex)[:500]
+                print(f"  ERROR ({vals['brand']} / {vals['name']}) — {msg.splitlines()[0] if msg else ''}")
+                stats["master_error"] += 1
+                err_rows = [{"collected_id": e["collected_id"], "local_master_id": local_id,
+                             "barcode": e["barcode"], "promoted_at": e["promoted_at"],
+                             "result": "error", "prod_master_id": None} for e in entries]
+                with src.cursor() as cur:
+                    insert_receipts(cur, run_id, err_rows, error=msg)
+                src.commit()
+                continue
         stats[f"master_{res['master_status']}"] += 1
         if res["master_status"] == "verified_held":
             print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
+        elif res["master_status"] == "review_held":
+            print(f"  REVIEW-HELD ({vals['brand']} / {vals['name']}) — 운영 master 검토 필요 상태, barcode 보류")
         elif res["master_status"] == "renamed_held":
             print(f"  RENAMED-HELD ({vals['brand']} / {vals['name']}) — 운영에서 이름이 바뀐 같은 상품, 수동 확인")
         elif res["master_status"] == "empty_held":
@@ -370,20 +436,26 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
             stats[f"barcode_{b['status']}"] += 1
             if b["status"] == "conflict":
                 print(f"  CONFLICT barcode {b['barcode']} — 운영에서 다른 master 소속, 보류")
-            elif b["status"] in ("inserted", "exists") and res.get("master_id"):
-                for cid in bc_to_cids.get(b["barcode"], []):
-                    attach_rows.append((res["master_id"], cid, local_id))
+        if dry_run:
+            continue
 
-    # prod_master_id는 **붙은 그 행(id)** 에만 기록. barcode 기준이 아니라 행 식별자
-    # 기준이라, 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
-    if not dry_run and (attach_rows or image_writeback):
+        rows = receipt_rows(local_id, entries, res)
+        attach = [(r["prod_master_id"], r["collected_id"], local_id, r["promoted_at"], r["barcode"])
+                  for r in rows if r["prod_master_id"]]
         with src.cursor() as cur:
-            writeback_attachments(cur, attach_rows)
+            insert_receipts(cur, run_id, rows)
+            written = writeback_attachments(cur, attach)
             # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피)
             for barcode, image_url in image_writeback:
                 cur.execute("update product_barcodes set image_url=%s where barcode=%s",
                             (image_url, barcode))
         src.commit()
+        stats["attached_written"] += written
+        if written < len(attach):
+            # 업로드 도중 그 행이 취소·수정·재승격돼 새 세대가 됨 — 옛 응답으로 채우지 않는다.
+            stats["stale_writeback"] += len(attach) - written
+            print(f"  STALE ({vals['brand']} / {vals['name']}) — 업로드 중 승격 세대가 바뀐 행"
+                  f" {len(attach) - written}건 기록 안 함")
     return stats
 
 

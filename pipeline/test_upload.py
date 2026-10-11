@@ -17,7 +17,8 @@ import tempfile
 import psycopg
 
 import promote
-from testdb import connect_test, source_dsn
+import upload_prod
+from testdb import connect_test, source_dsn, target_dsn
 from upload_prod import classify_dryrun, fetch_promoted, ingredients_hash, master_key, writeback_attachments
 
 results = []
@@ -546,17 +547,20 @@ def test_writeback_row_scoped():
         cur.execute("select id from product_masters where ingredients_raw='ia'"); ma = cur.fetchone()[0]
         # 같은 barcode B1을 가진 promoted 행 2개 (서로 다른 promoted_master_id)
         cur.execute("""insert into collected_products
-            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
-            values ('cp','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s)
-            returning id""", (B1, ma))
-        row_a = cur.fetchone()[0]
+            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,
+             promoted_master_id,promoted_at)
+            values ('cp','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s,now())
+            returning id, promoted_at""", (B1, ma))
+        row_a, pat_a = cur.fetchone()
         cur.execute("""insert into collected_products
-            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
-            values ('cp','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s)
+            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,
+             promoted_master_id,promoted_at)
+            values ('cp','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s,now())
             returning id""", (B1, mb))
         row_b = cur.fetchone()[0]
         # row_a만 붙은 것으로 writeback
-        writeback_attachments(cur, [("11111111-1111-1111-1111-111111111111", row_a, ma)])
+        n = writeback_attachments(cur, [("11111111-1111-1111-1111-111111111111", row_a, ma, pat_a, B1)])
+        check("writeback: 쓴 행 수 1", n == 1, str(n))
         cur.execute("select prod_master_id from collected_products where id=%s", (row_a,))
         check("writeback: 대상 행(id) 기록", str(cur.fetchone()[0]) == "11111111-1111-1111-1111-111111111111")
         cur.execute("select prod_master_id from collected_products where id=%s", (row_b,))
@@ -674,6 +678,355 @@ def test_cli_ids_all_exclusive():
     check("CLI --ids/--all 동시: 오류에 두 옵션 이름", "--ids" in r.stderr and "--all" in r.stderr, r.stderr[-200:])
 
 
+def test_receipt_rows_mapping():
+    """RPC 결과 → 영수증 행(순수 함수): 바코드별 결과와 붙은 경우에만 prod_master_id."""
+    import datetime as dt
+    pat = dt.datetime(2026, 10, 11, tzinfo=dt.timezone.utc)
+    ent = lambda cid, bc: {"collected_id": cid, "barcode": bc, "size": "1", "image_url": None,
+                           "image_source_url": None, "promoted_at": pat}
+    entries = [ent("c1", B1), ent("c2", B2)]
+    cases = [
+        ("inserted/inserted", {"master_id": "pm", "master_status": "inserted",
+                               "barcodes": [{"barcode": B1, "status": "inserted"}, {"barcode": B2, "status": "inserted"}]},
+         [("inserted", "pm"), ("inserted", "pm")]),
+        ("existing/inserted", {"master_id": "pm", "master_status": "existing",
+                               "barcodes": [{"barcode": B1, "status": "inserted"}, {"barcode": B2, "status": "exists"}]},
+         [("existing", "pm"), ("exists", "pm")]),
+        ("held/exists", {"master_id": "pm", "master_status": "verified_held",
+                         "barcodes": [{"barcode": B1, "status": "exists"}]},
+         [("exists", "pm"), ("verified_held", None)]),
+        ("any/conflict", {"master_id": "pm", "master_status": "inserted",
+                          "barcodes": [{"barcode": B1, "status": "conflict"}, {"barcode": B2, "status": "inserted"}]},
+         [("conflict", None), ("inserted", "pm")]),
+        ("review_held 목록 없음", {"master_id": "pm", "master_status": "review_held", "barcodes": []},
+         [("review_held", None), ("review_held", None)]),
+        ("empty_held/conflict", {"master_id": None, "master_status": "empty_held",
+                                 "barcodes": [{"barcode": B1, "status": "conflict"}, {"barcode": B2, "status": "conflict"}]},
+         [("conflict", None), ("conflict", None)]),
+    ]
+    for label, res, want in cases:
+        rows = upload_prod.receipt_rows("lm", entries, res)
+        got = [(r["result"], r["prod_master_id"]) for r in rows]
+        check(f"receipt_rows {label}", got == want, str(got))
+        check(f"receipt_rows {label}: 행 식별 칸",
+              [(r["collected_id"], r["local_master_id"], r["barcode"], r["promoted_at"]) for r in rows]
+              == [("c1", "lm", B1, pat), ("c2", "lm", B2, pat)])
+
+
+# ── 업로드 루프 통합 테스트: 원본 happycart_test → 대상 happycart_test_target(PgTarget) ──────────
+UP_BRAND = "UPT99"
+U1, U2, U3, U4, U5 = (_ean(f"99000000003{i}") for i in range(5))
+ALL_U = [U1, U2, U3, U4, U5]
+
+
+class _Abort(BaseException):
+    """테스트 전용 중단 — run_upload 가 Exception 만 잡으므로 이 예외는 그대로 빠져나간다."""
+
+
+class _NoUploader:
+    enabled = False
+
+
+class _HookTarget(upload_prod.PgTarget):
+    """실제 PgTarget 연결로 RPC 를 부르되, 호출 앞(before)·뒤(after)에 테스트 동작을 끼운다.
+    before(n, master) 가 dict 를 돌려주면 그 master 로 호출한다. n 은 1부터 센 호출 순번."""
+
+    def __init__(self, before=None, after=None):
+        self.conn = connect_test(target_dsn())
+        self.before, self.after, self.calls = before, after, []
+
+    def upload(self, master, barcodes):
+        n = len(self.calls) + 1
+        self.calls.append(master["name"])
+        if self.before:
+            master = self.before(n, master) or master
+        res = super().upload(master, barcodes)
+        if self.after:
+            self.after(n, master, res)
+        return res
+
+
+def _judged_row(cur, barcode, name, ing):
+    """승격 가능한 judged 행(원본). source_ref 는 처음 바코드로 고정."""
+    cur.execute("""insert into collected_products
+        (source, source_ref, raw, brand, name, size, category, barcode, ingredients_raw, confidence,
+         ingredients_tokens, verdict, rule_version, computed_at, stage, review_decision,
+         bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes)
+        values ('cp', %s, '{}'::jsonb, %s, %s, '10g', 'cat', %s, %s, 'high',
+                '{물}', 'okay'::verdict_enum, 'v1.1.0', now(), 'judged', 'verified', '{}', '{}', '{}')
+        returning id""", ("upt99_" + barcode, UP_BRAND, name, barcode, ing))
+    return cur.fetchone()[0]
+
+
+def _seed_upload(specs):
+    """specs: [(name, [barcode, ...]), ...] → 실제 run_promotion 으로 승격·커밋, {barcode: row_id}."""
+    from collections import Counter
+    rows = {}
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        for name, bcs in specs:
+            for bc in bcs:
+                rows[bc] = _judged_row(cur, bc, name, "upt99-" + name)
+        promote.run_promotion(cur, ids=[str(x) for x in rows.values()], stats=Counter())
+        c.commit()
+    return rows
+
+
+def _cleanup_upload():
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("""delete from upload_receipts where collected_id in
+                       (select id from collected_products where brand=%s)""", (UP_BRAND,))
+        cur.execute("delete from collected_products where brand=%s", (UP_BRAND,))
+        cur.execute("""delete from product_barcodes where barcode = any(%s)
+                       or master_id in (select id from product_masters where brand=%s)""", (ALL_U, UP_BRAND))
+        cur.execute("delete from product_masters where brand=%s", (UP_BRAND,))
+    with connect_test(target_dsn()) as c, c.cursor() as cur:
+        cur.execute("""delete from product_barcodes where barcode = any(%s)
+                       or master_id in (select id from product_masters where brand=%s)""", (ALL_U, UP_BRAND))
+        cur.execute("delete from product_masters where brand=%s", (UP_BRAND,))
+
+
+def _row_state(rid):
+    """(prod_master_id, [(result, prod_master_id, error)...] 전체 영수증, 현재 세대 최신 영수증 결과 or None)"""
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("select prod_master_id from collected_products where id=%s", (rid,))
+        pm = cur.fetchone()[0]
+        cur.execute("select result, prod_master_id, error from upload_receipts where collected_id=%s order by id",
+                    (rid,))
+        allr = cur.fetchall()
+        cur.execute("""select r.result from upload_receipts r join collected_products c
+                         on c.id = r.collected_id and r.promoted_at = c.promoted_at
+                       where c.id=%s order by r.id desc limit 1""", (rid,))
+        cur_r = cur.fetchone()
+    return pm, allr, (cur_r[0] if cur_r else None)
+
+
+def _row_names(rows):
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("""select c.id, m.name from collected_products c join product_masters m
+                       on m.id = c.promoted_master_id where c.id = any(%s)""", (list(rows.values()),))
+        return {name: rid for rid, name in cur.fetchall()}
+
+
+def _target_owner(barcode):
+    with connect_test(target_dsn()) as c, c.cursor() as cur:
+        cur.execute("select master_id from product_barcodes where barcode=%s", (barcode,))
+        r = cur.fetchone()
+        return r[0] if r else None
+
+
+def _run(target, **kw):
+    with connect_test(source_dsn()) as src:
+        return upload_prod.run_upload(src, target, manifest={}, uploader=_NoUploader(), **kw)
+
+
+def test_per_master_commit_and_rollback():
+    """두 번째 RPC 가 DB 오류여도 PgTarget 이 rollback 해 세 번째 master 는 정상, 첫 master 기록은 남는다."""
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티A", [U1]), ("업티B", [U2]), ("업티C", [U3])])
+        by_name = _row_names(rows)
+        # 두 번째 호출에만 timestamptz 로 바뀌지 않는 값을 넣어 RPC 안에서 DB 오류를 낸다.
+        target = _HookTarget(before=lambda n, m: dict(m, computed_at="not-a-timestamp") if n == 2 else None)
+        stats = _run(target, ids=list(rows.values()))
+        check("per-master: RPC 세 번 호출", len(target.calls) == 3, str(target.calls))
+        for i, name in enumerate(target.calls):
+            rid = by_name[name]
+            bc = next(b for b, r in rows.items() if r == rid)
+            pm, allr, _ = _row_state(rid)
+            if i == 1:
+                check("per-master: 실패 master 는 prod_master_id 없음", pm is None, str(pm))
+                check("per-master: 실패 master 는 error 영수증만",
+                      [r[0] for r in allr] == ["error"] and allr[0][1] is None and bool(allr[0][2]), str(allr))
+            else:
+                owner = _target_owner(bc)
+                check(f"per-master: {i + 1}번째 master 연결 기록", pm is not None and str(pm) == str(owner),
+                      f"{pm} / {owner}")
+                check(f"per-master: {i + 1}번째 master inserted 영수증",
+                      [(r[0], str(r[1])) for r in allr] == [("inserted", str(owner))], str(allr))
+        check("per-master: master_error 1", stats.get("master_error") == 1, str(dict(stats)))
+        check("per-master: 대상 연결이 실패 상태로 남지 않음",
+              target.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE,
+              str(target.conn.info.transaction_status))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_first_master_committed_before_next():
+    """두 번째 RPC 시점에 별도 원본 연결로 보면 첫 master 의 연결·영수증이 이미 커밋돼 있다."""
+    _cleanup_upload()
+    target, seen = None, {}
+    try:
+        rows = _seed_upload([("업티A", [U1]), ("업티B", [U2])])
+        by_name = _row_names(rows)
+
+        def before(n, m):
+            if n == 2:
+                pm, allr, _ = _row_state(by_name[target.calls[0]])
+                seen["pm"], seen["receipts"] = pm, [r[0] for r in allr]
+                raise _Abort()
+        target = _HookTarget(before=before)
+        aborted = False
+        try:
+            _run(target, ids=list(rows.values()))
+        except _Abort:
+            aborted = True
+        check("immediate: 두 번째 RPC 에서 중단", aborted)
+        check("immediate: 두 번째 RPC 시점에 첫 master prod_master_id 보임", seen.get("pm") is not None, str(seen))
+        check("immediate: 두 번째 RPC 시점에 첫 master 영수증 보임", seen.get("receipts") == ["inserted"], str(seen))
+        pm, allr, _ = _row_state(by_name[target.calls[0]])
+        check("immediate: 중단 뒤에도 첫 master 기록 유지",
+              pm is not None and [r[0] for r in allr] == ["inserted"], f"{pm} {allr}")
+        pm2, allr2, _ = _row_state(by_name[target.calls[1]])
+        check("immediate: 두 번째 master 는 기록 없음", pm2 is None and allr2 == [], f"{pm2} {allr2}")
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_resume_after_remote_commit():
+    """운영 커밋 뒤 LOCAL 기록 전에 멈춘 상태 → 운영 master 그대로/verified/needs_review/이름 변경 → 기본 재실행이
+    이미 된 연결을 LOCAL 에 기록하고 현재 영수증은 exists."""
+    mutate = {
+        "그대로": None,
+        "verified": "update product_masters set verified_status='verified' where id=%s",
+        "needs_review": "update product_masters set verified_status='needs_review' where id=%s",
+        "이름변경": "update product_masters set name='운영에서바뀐이름' where id=%s",
+    }
+    for label, sql in mutate.items():
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티R", [U1, U2])])
+            target = _HookTarget()
+            with connect_test(source_dsn()) as src:
+                masters, bcs, _ = fetch_promoted(src, ids=list(rows.values()))
+                (local_id, vals), = masters.items()
+                payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
+                           for e in bcs[local_id]]
+            first = target.upload(vals, payload)   # 운영 커밋, LOCAL 기록 없음
+            pm_id = first["master_id"]
+            if sql:
+                with target.conn.cursor() as cur:
+                    cur.execute(sql, (pm_id,))
+                target.conn.commit()
+            _run(target)
+            for bc, rid in rows.items():
+                pm, _, cur_r = _row_state(rid)
+                check(f"resume({label}) {bc[-2:]}: prod_master_id = 운영 master", str(pm) == str(pm_id), f"{pm} / {pm_id}")
+                check(f"resume({label}) {bc[-2:]}: 현재 영수증 exists", cur_r == "exists", str(cur_r))
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
+def test_redemote_repromote_regeneration():
+    """업로드로 연결된 행을 승격 취소 → 바코드 수정 → 재승격하면 prod_master_id 는 NULL, 기본 선택에 다시 잡히고
+    옛 영수증은 현재 상태가 아니다."""
+    from collections import Counter
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티D", [U1])])
+        rid = rows[U1]
+        target = _HookTarget()
+        _run(target, ids=[rid])
+        pm, allr, cur_r = _row_state(rid)
+        check("regen: 업로드 뒤 연결·inserted", pm is not None and cur_r == "inserted", f"{pm} {cur_r}")
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("select public.demote_collected_product(%s)", (rid,))
+            cur.execute("update collected_products set barcode=%s where id=%s", (U4, rid))
+            promote.run_promotion(cur, ids=[str(rid)], stats=Counter())
+            c.commit()
+        pm, allr, cur_r = _row_state(rid)
+        check("regen: 재승격 뒤 prod_master_id NULL", pm is None, str(pm))
+        check("regen: 옛 영수증은 남아 있음", len(allr) >= 1, str(allr))
+        check("regen: 현재 상태 영수증 없음", cur_r is None, str(cur_r))
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("select promoted_master_id from collected_products where id=%s", (rid,))
+            new_mid = cur.fetchone()[0]
+            masters, bcs, _ = fetch_promoted(c)
+            check("regen: 기본 선택에 다시 잡힘", new_mid in masters
+                  and [e["barcode"] for e in bcs[new_mid]] == [U4], str(list(masters)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_inflight_regeneration_not_filled():
+    """RPC 진행 중 그 행이 취소 → 바코드 수정 → 같은 LOCAL master 로 재승격되면, 옛 응답이 새 세대를 채우지 않는다."""
+    from collections import Counter
+    _cleanup_upload()
+    target, setup = None, {}
+    try:
+        rows = _seed_upload([("업티F", [U1, U2])])
+        r1, r2 = rows[U1], rows[U2]
+
+        def after(n, m, res):
+            with connect_test(source_dsn()) as c, c.cursor() as cur:
+                cur.execute("select promoted_master_id from collected_products where id=%s", (r1,))
+                setup["before"] = cur.fetchone()[0]
+                cur.execute("select public.demote_collected_product(%s)", (r1,))
+                cur.execute("update collected_products set barcode=%s where id=%s", (U3, r1))
+                promote.run_promotion(cur, ids=[str(r1)], stats=Counter())
+                cur.execute("select promoted_master_id, stage from collected_products where id=%s", (r1,))
+                setup["after"], setup["stage"] = cur.fetchone()
+                c.commit()
+        target = _HookTarget(after=after)
+        stats = _run(target, ids=[r1, r2])
+        check("inflight: 준비 — 재승격 뒤 같은 LOCAL master",
+              setup.get("before") is not None and setup.get("before") == setup.get("after")
+              and setup.get("stage") == "promoted", str(setup))
+        pm1, allr1, cur1 = _row_state(r1)
+        check("inflight: 새 세대 prod_master_id NULL", pm1 is None, str(pm1))
+        check("inflight: 새 세대 현재 영수증 없음", cur1 is None, f"{cur1} {allr1}")
+        pm2, _, cur2 = _row_state(r2)
+        check("inflight: 형제 행은 정상 기록", pm2 is not None and cur2 == "inserted", f"{pm2} {cur2}")
+        check("inflight: stale_writeback 1", stats.get("stale_writeback") == 1, str(dict(stats)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_writeback_generation_and_barcode_conditions():
+    """기록 조건을 따로 증명: 같은 세대에서 바코드만 바뀜 → 0행, 같은 바코드로 세대만 바뀜 → 0행, 둘 다 같음 → 1행."""
+    pm_id = "22222222-2222-2222-2222-222222222222"
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        mids, rows = _seed_promoted(cur, [("WG", [(U1, False)])])
+        rid, mid = rows[U1], mids["WG"]
+        cur.execute("select promoted_at, barcode from collected_products where id=%s", (rid,))
+        pat, bc = cur.fetchone()
+        item = [(pm_id, rid, mid, pat, bc)]
+
+        def prod():
+            cur.execute("select prod_master_id from collected_products where id=%s", (rid,))
+            return cur.fetchone()[0]
+
+        cur.execute("update collected_products set barcode=%s where id=%s", (U2, rid))
+        n = writeback_attachments(cur, item)
+        check("writeback 조건: 바코드만 바뀌면 0행", n == 0, str(n))
+        check("writeback 조건: 바코드만 바뀌면 NULL 유지", prod() is None)
+        cur.execute("update collected_products set barcode=%s where id=%s", (bc, rid))
+
+        cur.execute("update collected_products set promoted_at = promoted_at + interval '1 second' where id=%s", (rid,))
+        n = writeback_attachments(cur, item)
+        check("writeback 조건: 세대만 바뀌면 0행", n == 0, str(n))
+        check("writeback 조건: 세대만 바뀌면 NULL 유지", prod() is None)
+        cur.execute("update collected_products set promoted_at=%s where id=%s", (pat, rid))
+
+        n = writeback_attachments(cur, item)
+        check("writeback 조건: 둘 다 같으면 1행", n == 1, str(n))
+        check("writeback 조건: 기록됨", str(prod()) == pm_id)
+        conn.rollback()
+
+
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
@@ -685,7 +1038,11 @@ def main():
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify,
               test_fetch_scope_default, test_fetch_scope_ids, test_fetch_scope_all,
-              test_fetch_scope_ids_empty, test_cli_ids_all_exclusive, test_cli_ids_empty]:
+              test_fetch_scope_ids_empty, test_cli_ids_all_exclusive, test_cli_ids_empty,
+              test_receipt_rows_mapping, test_writeback_generation_and_barcode_conditions,
+              test_per_master_commit_and_rollback, test_first_master_committed_before_next,
+              test_resume_after_remote_commit, test_redemote_repromote_regeneration,
+              test_inflight_regeneration_not_filled]:
         try:
             t()
         except Exception as e:  # noqa
