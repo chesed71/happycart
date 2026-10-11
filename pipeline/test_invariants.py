@@ -1165,6 +1165,9 @@ def test_bootstrap_guard():
         shutil.copy(os.path.join(here, "bootstrap_local.sh"), os.path.join(copy, "pipeline"))
         with open(os.path.join(copy, "pipeline", ".env"), "w") as f:
             f.write("HAPPYCART_PG_DB=happycart\n")
+        # 가짜 docker 덕에 스크립트가 가드를 지나 계속 진행하고, 기록된 drop 뒤에
+        # 임시 복사본에 compat 파일이 없어 실패한다. 이는 예상된 동작이며
+        # 이 테스트는 기록된 drop 대상만 검사한다.
         r, calls = run(os.path.join(copy, "pipeline"), "happycart_test", "happycart_test")
         drops = [ln for ln in calls.splitlines() if "drop database" in ln]
         check("bootstrap 가드: .env보다 호출자 DB 우선, drop 대상 happycart_test",

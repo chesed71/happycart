@@ -103,7 +103,11 @@ def judge_collected(
         read = {str(cid): (tokens, stage, rv) for cid, tokens, stage, rv in rows}
         results = run_rules([{"ref": str(cid), "tokens": tokens or []} for cid, tokens, _, _ in rows], app_dir)
         for r in results:
-            tokens, stage, rv = read[r["ref"]]
+            got = read.get(r["ref"])
+            if got is None:  # Dart가 모르는 ref를 돌려준 경우 — 쓰지 않음
+                stats["stale_skipped"] += 1
+                continue
+            tokens, stage, rv = got
             if write_verdict(cur, r["ref"], tokens, stage, rv, r):
                 stats[f"collected_{r['verdict']}"] += 1
             else:

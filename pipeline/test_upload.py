@@ -1,7 +1,7 @@
 """upload_promoted_product RPC + dry-run 분류 테스트 (rollback-wrapped).
 
 운영 업로드의 핵심 불변식을 검증한다: verified 가드, barcode 충돌, 멱등, dry-run 분류.
-RPC 테스트는 로컬 happycart(운영과 동일 스키마)에서 트랜잭션 후 rollback 한다.
+RPC 테스트는 전용 테스트 DB happycart_test(testdb.connect_test)에서 트랜잭션 후 rollback 한다. 운영 happycart 에는 연결하지 않는다.
 
 사용: pipeline/.venv/bin/python test_upload.py
 참고: PR #6 리뷰 대응 (HIGH 1·2, MEDIUM 1·4)
