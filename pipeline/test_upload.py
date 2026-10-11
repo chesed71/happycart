@@ -60,9 +60,9 @@ def test_rpc_insert_and_idempotent():
         r1 = _call(cur, m, bcs)
         check("RPC 신규 master inserted", r1["master_status"] == "inserted", r1["master_status"])
         check("RPC 신규 barcode inserted", r1["barcodes"][0]["status"] == "inserted")
-        # 멱등: 같은 걸 다시 → updated + barcode exists
+        # 멱등: 같은 걸 다시 → existing + barcode exists
         r2 = _call(cur, m, bcs)
-        check("RPC 재실행 master updated", r2["master_status"] == "updated", r2["master_status"])
+        check("RPC 재실행 master existing", r2["master_status"] == "existing", r2["master_status"])
         check("RPC 재실행 barcode exists", r2["barcodes"][0]["status"] == "exists")
         check("RPC 멱등: id 동일", r1["master_id"] == r2["master_id"])
         cur.execute("select count(*) from product_barcodes where barcode=%s", (B1,))
@@ -265,9 +265,9 @@ def test_rpc_same_ingredients_different_name():
               ra["master_status"] == "inserted" and rb["master_status"] == "inserted",
               f'{ra["master_status"]}/{rb["master_status"]}')
         check("이름 다른 master id 분리", ra["master_id"] != rb["master_id"])
-        # 이름이 같으면 기존 master 재사용(updated)
+        # 이름이 같으면 기존 master 재사용(existing)
         rc = _call(cur, dict(a), [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
-        check("같은 이름은 기존 master 재사용", rc["master_id"] == ra["master_id"] and rc["master_status"] == "updated",
+        check("같은 이름은 기존 master 재사용", rc["master_id"] == ra["master_id"] and rc["master_status"] == "existing",
               rc["master_status"])
         conn.rollback()
 
@@ -307,6 +307,127 @@ def test_rpc_mixed_barcode():
         check("mixed: B2 inserted", sm[B2] == "inserted")
         cur.execute("select master_id from product_barcodes where barcode=%s", (B2,))
         check("mixed: B2가 새 master에 연결", str(cur.fetchone()[0]) == str(r["master_id"]))
+        conn.rollback()
+
+
+# 0020 이 같은 master_key 의 unverified master 에 덮어쓰던 내용 컬럼 전부(0021 부터 불변).
+_CONTENT_COLS = ("category", "ingredients_tokens", "bad_ingredients_detected", "good_ingredients_detected",
+                 "verdict_reason_codes", "verdict", "rule_version", "computed_at", "source", "source_url",
+                 "source_checked_at")
+
+
+def _snapshot(cur, mid):
+    cur.execute(f"select {', '.join(_CONTENT_COLS)}, updated_at from product_masters where id=%s", (mid,))
+    row = cur.fetchone()
+    return row[:-1], row[-1]
+
+
+def _hand_edit(cur, mid):
+    """운영 데스크에서 사람이 고친 것처럼 내용 컬럼 전부를 _master() 입력과 다른 값으로 바꾼다."""
+    cur.execute("""update product_masters set category='수동분류', ingredients_tokens='{수동토큰}',
+        bad_ingredients_detected='{수동나쁨}', good_ingredients_detected='{수동좋음}',
+        verdict_reason_codes='{MANUAL}', verdict='not_okay', rule_version='v-manual',
+        computed_at='2020-01-01T00:00:00Z', source='수동', source_url='https://manual.example',
+        source_checked_at='2020-01-01T00:00:00Z' where id=%s""", (mid,))
+
+
+def test_rpc_unverified_existing_immutable():
+    """같은 master_key 의 unverified master: 내용 컬럼 불변, 결과 existing, 새 바코드가 붙을 때만 updated_at 갱신(0021).
+
+    커밋형 — updated_at 은 트랜잭션 시작 시각(now())이라 한 트랜잭션 안에서는 바뀌었는지 볼 수 없다."""
+    brand = "UPLOADTEST_IMM"
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    m = _master(brand=brand, ing="i-imm")
+    try:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+            mid = _call(cur, m, [bc(B1)])["master_id"]
+            conn.commit()
+            _hand_edit(cur, mid)
+            conn.commit()
+            snap, snap_at = _snapshot(cur, mid)
+            conn.commit()
+            check("immutable: 준비 값이 입력과 모두 다름",
+                  all(a != b for a, b in zip(snap, (m["category"], m["ingredients_tokens"], m["bad_ingredients_detected"],
+                                                    m["good_ingredients_detected"], m["verdict_reason_codes"], m["verdict"],
+                                                    m["rule_version"], None, m["source"], m["source_url"], None))))
+
+            r = _call(cur, m, [bc(B1)])
+            conn.commit()
+            check("immutable: 기존 바코드만 → existing", r["master_status"] == "existing", r["master_status"])
+            check("immutable: master_id 동일", str(r["master_id"]) == str(mid))
+            check("immutable: B1 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+            now_snap, now_at = _snapshot(cur, mid)
+            conn.commit()
+            check("immutable: 내용 컬럼 전부 불변", now_snap == snap, f"{now_snap} != {snap}")
+            check("immutable: 새 바코드 없으면 updated_at 불변", now_at == snap_at, f"{now_at} != {snap_at}")
+
+            r = _call(cur, m, [bc(B1), bc(B2)])
+            conn.commit()
+            check("immutable: B1·B2 → existing", r["master_status"] == "existing", r["master_status"])
+            sm = {x["barcode"]: x["status"] for x in r["barcodes"]}
+            check("immutable: B1 exists·B2 inserted", sm == {B1: "exists", B2: "inserted"}, str(sm))
+            cur.execute("select master_id from product_barcodes where barcode=%s", (B2,))
+            check("immutable: B2 가 그 master 에 연결", str(cur.fetchone()[0]) == str(mid))
+            now_snap, now_at = _snapshot(cur, mid)
+            conn.commit()
+            check("immutable: 바코드가 붙어도 내용 컬럼 불변", now_snap == snap, f"{now_snap} != {snap}")
+            check("immutable: 새 바코드가 붙으면 updated_at 갱신", now_at > snap_at, f"{now_at} <= {snap_at}")
+    finally:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_review_held():
+    """needs_review master: master·바코드 모두 쓰지 않고 review_held, 이미 그 master 소속 바코드는 exists(0021)."""
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        m = _master(brand="UPLOADTEST_REV", ing="i-rev")
+        mid = _call(cur, m, [bc(B1)])["master_id"]
+        cur.execute("update product_masters set verified_status='needs_review' where id=%s", (mid,))
+        snap, snap_at = _snapshot(cur, mid)
+        r = _call(cur, m, [bc(B1), bc(B2)])
+        check("review_held", r["master_status"] == "review_held", r["master_status"])
+        check("review_held: master_id 는 그 master", str(r["master_id"]) == str(mid))
+        check("review_held: B1 만 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+        check("review_held: B2 미연결", cur.fetchone()[0] is False)
+        check("review_held: master 컬럼 불변", _snapshot(cur, mid) == (snap, snap_at))
+        cur.execute("select verified_status::text from product_masters where id=%s", (mid,))
+        check("review_held: 상태 needs_review 유지", cur.fetchone()[0] == "needs_review")
+        conn.rollback()
+
+
+def test_rpc_held_returns_existing_links():
+    """verified_held·renamed_held 도 입력 바코드 중 이미 그 master 소속인 것만 exists 로 돌려준다(0021)."""
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        m = _master(brand="UPLOADTEST_HV", ing="i-hv")
+        mid = _call(cur, m, [bc(B1)])["master_id"]
+        cur.execute("update product_masters set verified_status='verified' where id=%s", (mid,))
+        r = _call(cur, m, [bc(B1), bc(B2)])
+        check("held(verified): verified_held", r["master_status"] == "verified_held", r["master_status"])
+        check("held(verified): master_id", str(r["master_id"]) == str(mid))
+        check("held(verified): B1 만 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+        check("held(verified): B2 미연결", cur.fetchone()[0] is False)
+        conn.rollback()
+
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        m = _master(brand="UPLOADTEST_HR", ing="i-hr")
+        mid = _call(cur, m, [bc(B1)])["master_id"]
+        cur.execute("update product_masters set name='운영에서바뀐이름' where id=%s", (mid,))
+        r = _call(cur, m, [bc(B1), bc(B2)])
+        check("held(renamed): renamed_held", r["master_status"] == "renamed_held", r["master_status"])
+        check("held(renamed): master_id 는 이름이 바뀐 master", str(r["master_id"]) == str(mid))
+        check("held(renamed): B1 만 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+        check("held(renamed): B2 미연결", cur.fetchone()[0] is False)
+        cur.execute("select count(*) from product_masters where brand=%s", (m["brand"],))
+        check("held(renamed): 새 master 미생성", cur.fetchone()[0] == 1)
         conn.rollback()
 
 
@@ -448,6 +569,8 @@ def main():
               test_rpc_same_ingredients_different_name, test_rpc_renamed_held,
               test_rpc_locks_owner_master, test_rpc_serializes_same_ingredients_uploads,
               test_rpc_cross_upload_no_deadlock,
+              test_rpc_unverified_existing_immutable, test_rpc_review_held,
+              test_rpc_held_returns_existing_links,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify]:
         try:
