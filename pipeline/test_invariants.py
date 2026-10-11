@@ -1199,6 +1199,44 @@ def test_tokenize_write_guard():
         conn.rollback()
 
 
+def test_judge_write_guard():
+    """읽은 뒤 토큰·stage·룰 버전이 바뀐 행에는 판정을 쓰지 않는다(역순 완료 포함)."""
+    from judge import write_verdict
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cid = _fixture(cur, stage="tokenized", ingredients="밀가루, 설탕")
+        cur.execute("update collected_products set rule_version=NULL where id=%s", (cid,))
+        toks = ["밀가루", "설탕"]
+
+        def vf(rv):
+            return {"verdict": "okay", "bad_ingredients_detected": [], "good_ingredients_detected": [],
+                    "verdict_reason_codes": [], "rule_version": rv}
+
+        def state():
+            cur.execute("select stage::text, rule_version, ingredients_tokens from collected_products where id=%s",
+                        (cid,))
+            return cur.fetchone()
+
+        before = state()
+        r = write_verdict(cur, cid, ["밀가루", "소금"], "tokenized", None, vf("v1"))
+        check("토큰 불일치→False·그대로", r is False and state() == before, f"{r} {state()}")
+        r = write_verdict(cur, cid, toks, "tokenized", None, vf("v1"))
+        check("일치(룰 NULL)→True·judged·룰 기록", r is True and state()[:2] == ("judged", "v1"), f"{r} {state()}")
+
+        cur.execute("update collected_products set stage='parsed', ingredients_tokens=NULL where id=%s", (cid,))
+        before = state()
+        r = write_verdict(cur, cid, toks, "tokenized", None, vf("v2"))
+        check("parsed·토큰 NULL 로 되돌린 뒤→False", r is False and state() == before, f"{r} {state()}")
+
+        cur.execute("update collected_products set stage='judged', rule_version='v1', ingredients_tokens=%s where id=%s",
+                    (toks, cid))
+        r3 = write_verdict(cur, cid, toks, "judged", "v1", vf("v3"))
+        r2 = write_verdict(cur, cid, toks, "judged", "v1", vf("v2"))
+        check("역순 완료: v3 성공·v2 False·v3 유지", r3 is True and r2 is False and state()[1] == "v3",
+              f"{r3} {r2} {state()}")
+        conn.rollback()
+
+
 def main():
     for t in [test_testdb_guard, test_bootstrap_guard, test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
@@ -1222,7 +1260,7 @@ def main():
               test_merged_child_verified_promotes_via_parent_only,
               test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
               test_parent_barcode_conflict_holds_merged_child,
-              test_tokenize_write_guard]:
+              test_tokenize_write_guard, test_judge_write_guard]:
         try:
             t()
         except Exception as e:  # noqa
