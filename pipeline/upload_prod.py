@@ -31,6 +31,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+import uuid
 from collections import Counter
 from datetime import datetime
 
@@ -71,32 +72,59 @@ def _jsonable(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
 
-def fetch_promoted(src):
-    """승격된 master(중복 제거) + master별 barcode 목록."""
+def fetch_promoted(src, *, ids=None, all_=False):
+    """승격된 master(중복 제거) + master별 barcode 목록 + 건너뛴 id 목록.
+
+    범위(master id 집합을 먼저 SQL로 정한다):
+      - ids: 그 collected_products.id 중 stage='promoted' 행의 promoted_master_id
+      - all_: 모든 승격 master
+      - 기본: stage='promoted' 이고 prod_master_id 가 NULL 인 행이 하나라도 있는 master
+    고른 master 는 이미 연결된 형제 행을 포함해 모든 승격 행의 바코드를 돌려준다.
+    skipped: ids 중 승격이 아니거나 없는 id (문자열)."""
+    skipped: list = []
     with src.cursor() as cur:
+        if ids:
+            ids = [str(i) for i in ids]
+            cur.execute("""
+                select id::text, promoted_master_id from collected_products
+                where id = any(%s::uuid[]) and stage = 'promoted' and promoted_master_id is not null
+            """, (ids,))
+            found = {r[0]: r[1] for r in cur.fetchall()}
+            skipped = [i for i in ids if i not in found]
+            master_ids = sorted(set(found.values()), key=str)
+        else:
+            cond = "" if all_ else "and prod_master_id is null"
+            cur.execute(f"""
+                select distinct promoted_master_id from collected_products
+                where stage = 'promoted' and promoted_master_id is not null {cond}
+            """)
+            master_ids = [r[0] for r in cur.fetchall()]
+        if not master_ids:
+            return {}, {}, skipped
         cur.execute(f"""
             select distinct m.id, {', '.join('m.' + c for c in MASTER_COLS)}
             from product_masters m
             join collected_products c on c.promoted_master_id = m.id
-            where c.stage = 'promoted'
-        """)
+            where c.stage = 'promoted' and m.id = any(%s)
+        """, (master_ids,))
         masters = {r[0]: dict(zip(MASTER_COLS, (_jsonable(x) for x in r[1:]))) for r in cur.fetchall()}
         # collected row 식별자(id)를 함께 들고 온다 — writeback을 행 단위로 좁히기 위해.
         # barcode가 collected_products에서 유니크하지 않으므로 (b.master_id =
         # c.promoted_master_id)까지 묶어 그 행의 바코드만 매칭한다.
         cur.execute("""
-            select c.promoted_master_id, c.id, c.barcode, b.size, b.image_url, b.image_source_url
+            select c.promoted_master_id, c.id, c.barcode, b.size, b.image_url, b.image_source_url,
+                   c.promoted_at
             from collected_products c
             join product_barcodes b
               on b.barcode = c.barcode and b.master_id = c.promoted_master_id
-            where c.stage = 'promoted'
-        """)
+            where c.stage = 'promoted' and c.promoted_master_id = any(%s)
+        """, (master_ids,))
         bc_by_master: dict = {}
-        for mid, cid, barcode, size, iu, isu in cur.fetchall():
+        for mid, cid, barcode, size, iu, isu, pat in cur.fetchall():
             bc_by_master.setdefault(mid, []).append(
                 {"collected_id": cid, "barcode": barcode, "size": size,
-                 "image_url": iu, "image_source_url": isu})
-    return masters, bc_by_master
+                 "image_url": iu, "image_source_url": isu, "promoted_at": pat})
+    return masters, bc_by_master, skipped
 
 
 # ── REST 백엔드 ───────────────────────────────────────────────────────────────
@@ -294,67 +322,99 @@ def classify_dryrun(target, vals, barcodes):
     return {"master_id": existing_id, "master_status": m_status, "barcodes": bc_out}
 
 
+def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=None,
+               uploader=None, run_id=None):
+    """승격분을 운영에 올리고 집계(Counter)를 돌려준다. run_id 는 아직 쓰지 않는다."""
+    stats = Counter()
+    image_writeback = []  # (barcode, image_url) — Storage 업로드 성공분, 로컬에 되쓰기
+    if manifest is None:
+        manifest = load_image_manifest()
+    if uploader is None:
+        uploader = StorageUploader()
+
+    masters, bc_by_master, skipped = fetch_promoted(src, ids=ids, all_=all_)
+    stats["skipped_ids"] = len(skipped)
+    if skipped:
+        print(f"건너뜀(승격 아님/없음) {len(skipped)}건: {', '.join(skipped[:5])}"
+              + (" ..." if len(skipped) > 5 else ""))
+    if not masters:
+        print("업로드할 승격분 없음")
+        return stats
+    print(f"승격 master {len(masters)} / barcode {sum(len(v) for v in bc_by_master.values())}"
+          + (" [DRY-RUN]" if dry_run else ""))
+    # prod_master_id는 collected_products(행=바코드) 단위로, **실제로 운영에 붙은
+    # 바코드(inserted/exists) 행에만** 기록한다. verified_held / conflict / empty_held
+    # 행은 운영에 올라가지 않았으므로 기록하지 않는다(=미매핑, 수동 처리 대상).
+    # → prod_master_id is null & stage='promoted' = "아직 운영 미반영"으로 조회 가능.
+    attach_rows = []  # (prod_master_id, collected_id, local_master_id) — 붙은 행만
+    for local_id, vals in masters.items():
+        entries = bc_by_master.get(local_id, [])
+        # image_url 이 비어있는 바코드는 정리된 JPEG 를 Storage 에 올려 채운다.
+        image_writeback += enrich_images(entries, manifest, uploader, stats, dry_run)
+        payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
+                   for e in entries]
+        bc_to_cids = {}
+        for e in entries:
+            bc_to_cids.setdefault(e["barcode"], []).append(e["collected_id"])
+        res = classify_dryrun(target, vals, payload) if dry_run else target.upload(vals, payload)
+        stats[f"master_{res['master_status']}"] += 1
+        if res["master_status"] == "verified_held":
+            print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
+        elif res["master_status"] == "renamed_held":
+            print(f"  RENAMED-HELD ({vals['brand']} / {vals['name']}) — 운영에서 이름이 바뀐 같은 상품, 수동 확인")
+        elif res["master_status"] == "empty_held":
+            print(f"  EMPTY-HELD ({vals['brand']} / {vals['name']}) — 바코드 전부 충돌, master 미생성")
+        for b in res["barcodes"]:
+            stats[f"barcode_{b['status']}"] += 1
+            if b["status"] == "conflict":
+                print(f"  CONFLICT barcode {b['barcode']} — 운영에서 다른 master 소속, 보류")
+            elif b["status"] in ("inserted", "exists") and res.get("master_id"):
+                for cid in bc_to_cids.get(b["barcode"], []):
+                    attach_rows.append((res["master_id"], cid, local_id))
+
+    # prod_master_id는 **붙은 그 행(id)** 에만 기록. barcode 기준이 아니라 행 식별자
+    # 기준이라, 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
+    if not dry_run and (attach_rows or image_writeback):
+        with src.cursor() as cur:
+            writeback_attachments(cur, attach_rows)
+            # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피)
+            for barcode, image_url in image_writeback:
+                cur.execute("update product_barcodes set image_url=%s where barcode=%s",
+                            (image_url, barcode))
+        src.commit()
+    return stats
+
+
+def _uuid_list(text):
+    out = []
+    for part in text.split(","):
+        part = part.strip()
+        if part:
+            try:
+                out.append(str(uuid.UUID(part)))
+            except ValueError:
+                raise argparse.ArgumentTypeError(f"uuid 형식이 아님: {part}")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target-dsn", default=None)
     ap.add_argument("--dry-run", action="store_true")
+    grp = ap.add_mutually_exclusive_group()
+    grp.add_argument("--ids", type=_uuid_list, default=None,
+                     help="콤마 구분 collected_products.id — 그 행의 승격 master 만 업로드")
+    grp.add_argument("--all", dest="all_", action="store_true",
+                     help="이미 연결된 master 포함 모든 승격 master 업로드 (기본: 미연결 master 만)")
     args = ap.parse_args()
 
     target = PgTarget(args.target_dsn) if args.target_dsn else RestTarget()
     manifest = load_image_manifest()
     uploader = StorageUploader()
-    stats = Counter()
-    image_writeback = []  # (barcode, image_url) — Storage 업로드 성공분, 로컬에 되쓰기
 
     with connect() as src:
-        masters, bc_by_master = fetch_promoted(src)
-        if not masters:
-            print("업로드할 승격분 없음 (stage='promoted' 0건)")
-            return
-        print(f"승격 master {len(masters)} / barcode {sum(len(v) for v in bc_by_master.values())}"
-              + (" [DRY-RUN]" if args.dry_run else ""))
-
-        # prod_master_id는 collected_products(행=바코드) 단위로, **실제로 운영에 붙은
-        # 바코드(inserted/exists) 행에만** 기록한다. verified_held / conflict / empty_held
-        # 행은 운영에 올라가지 않았으므로 기록하지 않는다(=미매핑, 수동 처리 대상).
-        # → prod_master_id is null & stage='promoted' = "아직 운영 미반영"으로 조회 가능.
-        attach_rows = []  # (prod_master_id, collected_id, local_master_id) — 붙은 행만
-        for local_id, vals in masters.items():
-            entries = bc_by_master.get(local_id, [])
-            # image_url 이 비어있는 바코드는 정리된 JPEG 를 Storage 에 올려 채운다.
-            image_writeback += enrich_images(entries, manifest, uploader, stats, args.dry_run)
-            payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
-                       for e in entries]
-            bc_to_cids = {}
-            for e in entries:
-                bc_to_cids.setdefault(e["barcode"], []).append(e["collected_id"])
-            res = classify_dryrun(target, vals, payload) if args.dry_run else target.upload(vals, payload)
-            stats[f"master_{res['master_status']}"] += 1
-            if res["master_status"] == "verified_held":
-                print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
-            elif res["master_status"] == "renamed_held":
-                print(f"  RENAMED-HELD ({vals['brand']} / {vals['name']}) — 운영에서 이름이 바뀐 같은 상품, 수동 확인")
-            elif res["master_status"] == "empty_held":
-                print(f"  EMPTY-HELD ({vals['brand']} / {vals['name']}) — 바코드 전부 충돌, master 미생성")
-            for b in res["barcodes"]:
-                stats[f"barcode_{b['status']}"] += 1
-                if b["status"] == "conflict":
-                    print(f"  CONFLICT barcode {b['barcode']} — 운영에서 다른 master 소속, 보류")
-                elif b["status"] in ("inserted", "exists") and res.get("master_id"):
-                    for cid in bc_to_cids.get(b["barcode"], []):
-                        attach_rows.append((res["master_id"], cid, local_id))
-
-        # prod_master_id는 **붙은 그 행(id)** 에만 기록. barcode 기준이 아니라 행 식별자
-        # 기준이라, 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
-        if not args.dry_run and (attach_rows or image_writeback):
-            with src.cursor() as cur:
-                writeback_attachments(cur, attach_rows)
-                # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피)
-                for barcode, image_url in image_writeback:
-                    cur.execute("update product_barcodes set image_url=%s where barcode=%s",
-                                (image_url, barcode))
-            src.commit()
-
+        stats = run_upload(src, target, ids=args.ids, all_=args.all_, dry_run=args.dry_run,
+                           manifest=manifest, uploader=uploader)
     print(dict(stats))
 
 

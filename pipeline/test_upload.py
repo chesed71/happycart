@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -17,7 +18,7 @@ import psycopg
 
 import promote
 from testdb import connect_test, source_dsn
-from upload_prod import classify_dryrun, ingredients_hash, master_key, writeback_attachments
+from upload_prod import classify_dryrun, fetch_promoted, ingredients_hash, master_key, writeback_attachments
 
 results = []
 
@@ -563,6 +564,99 @@ def test_writeback_row_scoped():
         conn.rollback()
 
 
+def _seed_promoted(cur, specs):
+    """원본 테스트 DB에 LOCAL master·바코드·승격 행을 만든다(호출자가 commit, _cleanup_promoted 로 삭제).
+    specs: [(master_label, [(barcode, linked_bool), ...]), ...] → ({label: master_id}, {barcode: row_id})"""
+    mids, rows = {}, {}
+    for label, items in specs:
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+            values ('FP99',%s,%s,'okay','v1',now(),'t',now(),'unverified') returning id""",
+                    (label, "fp99-" + label))
+        mids[label] = cur.fetchone()[0]
+        for bc, linked in items:
+            cur.execute("insert into product_barcodes (barcode, master_id, size) values (%s,%s,'1')",
+                        (bc, mids[label]))
+            cur.execute("""insert into collected_products
+                (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,
+                 review_decision,promoted_master_id,promoted_at,prod_master_id)
+                values ('cp',%s,'{}'::jsonb,'FP99',%s,'1',%s,%s,'high','promoted','verified',%s,now(),
+                        case when %s then gen_random_uuid() end) returning id""",
+                        ("fp99_" + bc, label, bc, "fp99-" + label, mids[label], linked))
+            rows[bc] = cur.fetchone()[0]
+    return mids, rows
+
+
+def _cleanup_promoted(cur, mids, rows):
+    cur.execute("delete from collected_products where id = any(%s)", (list(rows.values()),))
+    cur.execute("delete from product_barcodes where master_id = any(%s)", (list(mids.values()),))
+    cur.execute("delete from product_masters where id = any(%s)", (list(mids.values()),))
+
+
+FP1, FP2, FP3, FP4 = (_ean(f"99000000002{i}") for i in range(4))
+
+
+def _with_fetch_seed(fn):
+    with connect_test(source_dsn()) as conn:
+        cur = conn.cursor()
+        mids, rows = _seed_promoted(cur, [("M1", [(FP1, True), (FP2, False)]), ("M2", [(FP3, True)])])
+        # 승격이 아닌 행(검수 대기)
+        cur.execute("""insert into collected_products (source,source_ref,raw,brand,name,size,barcode,
+                ingredients_raw,confidence,stage) values ('cp','fp99_np','{}'::jsonb,'FP99','NP','1',%s,'x','high','judged')
+                returning id""", (FP4,))
+        rows[FP4] = cur.fetchone()[0]
+        conn.commit()
+        try:
+            fn(conn, mids, rows)
+        finally:
+            conn.rollback()
+            _cleanup_promoted(cur, mids, rows)
+            conn.commit()
+
+
+def test_fetch_scope_default():
+    def body(conn, mids, rows):
+        masters, bcs, skipped = fetch_promoted(conn)
+        check("fetch 기본: M1 포함", mids["M1"] in masters)
+        check("fetch 기본: 전부 연결된 M2 제외", mids["M2"] not in masters)
+        got = bcs.get(mids["M1"], [])
+        check("fetch 기본: M1 바코드 둘(연결된 형제 포함)", {e["barcode"] for e in got} == {FP1, FP2}, str(got))
+        check("fetch 기본: promoted_at 있음", all(e.get("promoted_at") is not None for e in got))
+        check("fetch 기본: skipped 없음", skipped == [])
+    _with_fetch_seed(body)
+
+
+def test_fetch_scope_ids():
+    def body(conn, mids, rows):
+        missing = "00000000-0000-0000-0000-000000000099"
+        masters, bcs, skipped = fetch_promoted(
+            conn, ids=[rows[FP3], rows[FP4], missing])
+        check("fetch ids: M2만", set(masters) == {mids["M2"]}, str(set(masters)))
+        check("fetch ids: 승격 아닌 행·없는 uuid가 skipped",
+              set(skipped) == {str(rows[FP4]), missing}, str(skipped))
+        masters, bcs, skipped = fetch_promoted(conn, ids=[rows[FP1], rows[FP2]])
+        check("fetch ids: 같은 master 한 번만", list(masters) == [mids["M1"]], str(list(masters)))
+        check("fetch ids: M1 바코드 둘", len(bcs[mids["M1"]]) == 2)
+        check("fetch ids: skipped 없음", skipped == [])
+    _with_fetch_seed(body)
+
+
+def test_fetch_scope_all():
+    def body(conn, mids, rows):
+        masters, _, _ = fetch_promoted(conn, all_=True)
+        check("fetch all: M1·M2", {mids["M1"], mids["M2"]} <= set(masters))
+    _with_fetch_seed(body)
+
+
+def test_cli_ids_all_exclusive():
+    here = os.path.dirname(os.path.abspath(__file__))
+    r = subprocess.run([sys.executable, os.path.join(here, "upload_prod.py"), "--ids",
+                        "00000000-0000-0000-0000-000000000001", "--all"],
+                       capture_output=True, text=True, cwd=here, timeout=60)
+    check("CLI --ids/--all 동시: 비정상 종료", r.returncode != 0, str(r.returncode))
+    check("CLI --ids/--all 동시: 오류에 두 옵션 이름", "--ids" in r.stderr and "--all" in r.stderr, r.stderr[-200:])
+
+
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
@@ -572,7 +666,9 @@ def main():
               test_rpc_unverified_existing_immutable, test_rpc_review_held,
               test_rpc_held_returns_existing_links,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
-              test_writeback_row_scoped, test_dryrun_classify]:
+              test_writeback_row_scoped, test_dryrun_classify,
+              test_fetch_scope_default, test_fetch_scope_ids, test_fetch_scope_all,
+              test_cli_ids_all_exclusive]:
         try:
             t()
         except Exception as e:  # noqa
