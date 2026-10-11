@@ -88,6 +88,9 @@ psql_db < "$REPO_ROOT/pipeline/sql/collected_products.sql"
 echo "==> review RPC + datadesk_review role (local-only)"
 psql_db < "$REPO_ROOT/pipeline/sql/review_rpc.sql"
 
+echo "==> upload_receipts (local-only)"
+psql_db < "$REPO_ROOT/pipeline/sql/upload_receipts.sql"
+
 echo "==> rollback function (local-only, no-op on fresh DB)"
 psql_db < "$REPO_ROOT/pipeline/sql/rollback_ungated_promotions.sql"
 

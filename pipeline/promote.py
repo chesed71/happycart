@@ -363,7 +363,8 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                     stats["child_barcode_promoted"] += 1 if ins else 0
                 cur.execute("""
                     update collected_products
-                    set stage = 'promoted', promoted_master_id = %s, promoted_at = now()
+                    set stage = 'promoted', promoted_master_id = %s, promoted_at = now(),
+                        prod_master_id = null
                     where id = %s
                 """, (master_id, tid))
 
