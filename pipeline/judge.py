@@ -47,6 +47,27 @@ def current_rule_version(app_dir: str) -> str:
     return run_rules([{"ref": "_probe", "tokens": ["물"]}], app_dir)[0]["rule_version"]
 
 
+def write_verdict(cur, row_id, read_tokens, read_stage, read_rule_version, verdict_fields) -> bool:
+    """읽은 토큰·stage·rule_version 이 그대로인 행에만 판정을 쓴다. 1행 썼으면 True."""
+    cur.execute("""
+        update collected_products
+        set verdict = %s::verdict_enum,
+            bad_ingredients_detected = %s,
+            good_ingredients_detected = %s,
+            verdict_reason_codes = %s,
+            rule_version = %s,
+            computed_at = now(),
+            stage = 'judged'
+        where id = %s
+          and ingredients_tokens is not distinct from %s
+          and stage = %s
+          and rule_version is not distinct from %s
+    """, (verdict_fields["verdict"], verdict_fields["bad_ingredients_detected"],
+          verdict_fields["good_ingredients_detected"], verdict_fields["verdict_reason_codes"],
+          verdict_fields["rule_version"], row_id, read_tokens, read_stage, read_rule_version))
+    return cur.rowcount == 1
+
+
 def judge_collected(
     conn,
     rule_version: str,
@@ -58,7 +79,7 @@ def judge_collected(
 ) -> None:
     with conn.cursor() as cur:
         query = """
-            select id, ingredients_tokens from collected_products
+            select id, ingredients_tokens, stage::text, rule_version from collected_products
             where (
                 stage = 'tokenized'
                 or (stage = 'judged' and rule_version is distinct from %s)
@@ -79,21 +100,18 @@ def judge_collected(
         rows = cur.fetchall()
         if not rows:
             return
-        results = run_rules([{"ref": str(cid), "tokens": tokens or []} for cid, tokens in rows], app_dir)
+        read = {str(cid): (tokens, stage, rv) for cid, tokens, stage, rv in rows}
+        results = run_rules([{"ref": str(cid), "tokens": tokens or []} for cid, tokens, _, _ in rows], app_dir)
         for r in results:
-            cur.execute("""
-                update collected_products
-                set verdict = %s::verdict_enum,
-                    bad_ingredients_detected = %s,
-                    good_ingredients_detected = %s,
-                    verdict_reason_codes = %s,
-                    rule_version = %s,
-                    computed_at = now(),
-                    stage = 'judged'
-                where id = %s
-            """, (r["verdict"], r["bad_ingredients_detected"], r["good_ingredients_detected"],
-                  r["verdict_reason_codes"], r["rule_version"], r["ref"]))
-            stats[f"collected_{r['verdict']}"] += 1
+            got = read.get(r["ref"])
+            if got is None:  # Dart가 모르는 ref를 돌려준 경우 — 쓰지 않음
+                stats["stale_skipped"] += 1
+                continue
+            tokens, stage, rv = got
+            if write_verdict(cur, r["ref"], tokens, stage, rv, r):
+                stats[f"collected_{r['verdict']}"] += 1
+            else:
+                stats["stale_skipped"] += 1  # 읽은 뒤 토큰·stage·룰 버전이 바뀐 행 — 쓰지 않음
 
 
 def judge_masters(conn, rule_version: str, stats: Counter, app_dir: str) -> None:
@@ -150,6 +168,7 @@ def main():
         else:
             judge_masters(conn, rule_version, stats, app_dir)
         conn.commit()
+        stats.setdefault("stale_skipped", 0)
         with conn.cursor() as cur:
             cur.execute("select stage, count(*) from collected_products group by stage order by 1")
             print(dict(stats))

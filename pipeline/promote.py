@@ -114,6 +114,32 @@ CANDIDATE_SELECT = """
     for update   -- 후보 행을 트랜잭션 동안 잠가 review RPC와의 경쟁 차단
 """
 
+def candidate_query(*, id=None, ids=None, source=None, source_ref=None):
+    """CANDIDATE_SELECT 에 범위 조건을 `order by`·`for update` 앞 WHERE 로 붙여 (sql, params) 반환.
+    범위를 주면 범위 밖 후보는 잠기지 않는다(예전엔 전체를 잠근 뒤 Python 으로 걸렀다).
+    비교 규칙은 예전 Python 필터와 같다: id 는 uuid 문자열(str(r[0]))과 정확히 일치, ids 는 문자열
+    집합 포함, source·source_ref 는 정확히 일치. 범위가 없으면 CANDIDATE_SELECT 와 []."""
+    conds, params = [], []
+    if id:
+        conds.append("id::text = %s")
+        params.append(id)
+    if ids is not None:
+        conds.append("id::text = any(%s)")
+        params.append([str(x) for x in ids])
+    if source:
+        conds.append("source = %s")
+        params.append(source)
+    if source_ref:
+        conds.append("source_ref = %s")
+        params.append(source_ref)
+    if not conds:
+        return CANDIDATE_SELECT, []
+    marker = "    order by source, source_ref\n"
+    head, tail = CANDIDATE_SELECT.split(marker)
+    extra = "".join(f"      and {c}\n" for c in conds)
+    return head + extra + marker + tail, params
+
+
 # 그룹의 머지 자식을 한 번에 잠그고 태그까지 같이 읽는다. 잠그기 전에 태그만 세어 보면 그 사이
 # 데이터데스크 RPC 가 flagged 를 걸어도 승격이 그대로 진행된다(TOCTOU) — 보류 판정과 실제 승격이
 # 같은 잠긴 행 집합을 보도록 여기서 먼저 잠근다. 태그·검수 RPC 는 행을 FOR UPDATE 로 잡으므로
@@ -129,6 +155,13 @@ MERGED_CHILDREN_LOCK = """
     order by id   -- 교착 회피: 항상 같은 순서로 잠근다
     for update
 """
+
+
+# 승격 실행끼리 직렬화하는 트랜잭션 advisory lock 키(고정값, 다른 advisory lock 사용처와 겹치지 않음).
+# 후보 잠금이 범위로 좁아져 서로 다른 배치가 동시에 돌 수 있는데, 두 배치가 같은 신규 master 를
+# 반대 순서로 INSERT 하면 master_key unique 대기로 교착한다. advisory lock 은 행을 잠그지 않아
+# 범위 밖 검수 저장은 막지 않는다.
+PROMOTE_ADVISORY_LOCK_KEY = 7_204_001_001
 
 
 def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
@@ -148,16 +181,11 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
     else:
         id_set = None
 
-    cur.execute(CANDIDATE_SELECT)
+    cur.execute("select pg_advisory_xact_lock(%s)", (PROMOTE_ADVISORY_LOCK_KEY,))
+    cand_sql, cand_params = candidate_query(
+        id=id, ids=id_set, source=source, source_ref=source_ref)
+    cur.execute(cand_sql, cand_params)
     rows = cur.fetchall()
-    if id:
-        rows = [r for r in rows if str(r[0]) == id]
-    if id_set is not None:
-        rows = [r for r in rows if str(r[0]) in id_set]
-    if source:
-        rows = [r for r in rows if r[1] == source]
-    if source_ref:
-        rows = [r for r in rows if r[2] == source_ref]
 
     # 승격 보류 사유별 카운트 (judged인데 조건 미달). 검토 필요(flagged)와 종료 태그
     # (missing_*, BLOCKING_TAGS)는 보류 사유가 다르므로(사람이 다시 볼 필요 vs 데이터 자체가

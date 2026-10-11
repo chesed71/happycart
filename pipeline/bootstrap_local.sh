@@ -10,19 +10,32 @@
 #   pipeline/bootstrap_local.sh                  # 시드 = 운영 베이스라인 (기본)
 #   pipeline/bootstrap_local.sh extra.sql        # 시드 외 추가 데이터가 생기면 선택 복원
 #
+# 안전장치: 대상 DB를 drop 하기 전에 BOOTSTRAP_CONFIRM_DB가 대상 DB 이름과 정확히 같아야 한다.
+#   BOOTSTRAP_CONFIRM_DB=happycart pipeline/bootstrap_local.sh                 # 운영 LOCAL 재구성
+#   HAPPYCART_PG_DB=happycart_test BOOTSTRAP_CONFIRM_DB=happycart_test pipeline/bootstrap_local.sh
+# 호출자 환경의 HAPPYCART_PG_DB는 pipeline/.env 값보다 우선한다.
+#
 # 참고: docs/superpowers/specs/2026-06-11-local-db-data-ingestion-plan.md §3
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# .env가 호출자 환경의 대상 DB를 덮어쓰지 못하게 로딩 전에 저장했다가 복원한다.
+CALLER_PG_DB="${HAPPYCART_PG_DB-}"
 # shellcheck disable=SC1091
 [[ -f "$SCRIPT_DIR/.env" ]] && set -a && . "$SCRIPT_DIR/.env" && set +a
+[[ -n "$CALLER_PG_DB" ]] && HAPPYCART_PG_DB="$CALLER_PG_DB"
 CONTAINER="${HAPPYCART_PG_CONTAINER:-happycart-pg}"
 DB="${HAPPYCART_PG_DB:-happycart}"
 PG_USER="${HAPPYCART_PG_USER:-postgres}"
 DUMP_FILE="${1:-}"
 
 psql_db() { docker exec -i "$CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$DB" -q; }
+
+if [[ "${BOOTSTRAP_CONFIRM_DB-}" != "$DB" ]]; then
+  echo "대상 DB($DB)와 BOOTSTRAP_CONFIRM_DB(${BOOTSTRAP_CONFIRM_DB-})가 다릅니다. 아무것도 지우지 않고 종료합니다." >&2
+  exit 1
+fi
 
 echo "==> recreate database $DB"
 docker exec "$CONTAINER" psql -U "$PG_USER" -q \
@@ -32,10 +45,10 @@ echo "==> compat + migrations (seeds included, skip 0011 storage + 0015 split)"
 psql_db < "$REPO_ROOT/supabase/local/00_compat.sql"
 for f in "$REPO_ROOT"/supabase/migrations/*.sql; do
   base="$(basename "$f")"
-  # 0011: storage 스키마 없음 (단독 postgres). 0015 split·0016 upload RPC·0019 master_key·
+  # 0011: storage 스키마 없음 (단독 postgres). 0015 split·0016 upload RPC·0017 lookup·0018 save RPC·0019 master_key·
   # 0020 RPC 가드: 아래에서 별도 적용 (0016·0019·0020이 0015의 product_masters에 의존).
   # 0014(insufficient 제거)는 products 스키마 변경이라 이 루프에서 정상 적용된다.
-  if [[ "$base" =~ ^(0011|0015|0016|0019|0020)_ ]]; then
+  if [[ "$base" =~ ^(0011|0015|0016|0017|0018|0019|0020)_ ]]; then
     continue
   fi
   echo "    $base"
@@ -52,6 +65,12 @@ psql_db < "$REPO_ROOT"/supabase/migrations/0015_*.sql
 
 echo "==> 0016 upload_promoted_product RPC"
 psql_db < "$REPO_ROOT"/supabase/migrations/0016_*.sql
+
+echo "==> 0017 lookup_product ingredients_raw (0015 뒤)"
+psql_db < "$REPO_ROOT"/supabase/migrations/0017_*.sql
+
+echo "==> 0018 save_service_product (product_barcodes 의존이라 0015 뒤)"
+psql_db < "$REPO_ROOT"/supabase/migrations/0018_*.sql
 
 echo "==> 0019 master_key (brand+name+ingredients 유일키)"
 psql_db < "$REPO_ROOT"/supabase/migrations/0019_*.sql

@@ -80,6 +80,16 @@ def run_golden() -> int:
     return 1 if failed else 0
 
 
+def write_tokens(cur, row_id, read_raw, tokens) -> bool:
+    """읽은 원문(read_raw)이 그대로이고 stage='parsed'인 행에만 토큰을 쓴다. 쓰면 True."""
+    cur.execute("""
+        update collected_products
+        set ingredients_tokens = %s, stage = 'tokenized'
+        where id = %s and stage = 'parsed' and ingredients_raw = %s
+    """, (tokens, row_id, read_raw))
+    return cur.rowcount == 1
+
+
 def run_tokenize(
     dsn: str | None,
     source: str | None = None,
@@ -108,15 +118,14 @@ def run_tokenize(
         for cid, raw in rows:
             tokens = tokenize(raw)
             if tokens:
-                cur.execute("""
-                    update collected_products
-                    set ingredients_tokens = %s, stage = 'tokenized'
-                    where id = %s
-                """, (tokens, cid))
-                stats["tokenized"] += 1
+                if write_tokens(cur, cid, raw, tokens):
+                    stats["tokenized"] += 1
+                else:
+                    stats["stale_skipped"] += 1  # 읽은 뒤 원재료·stage 가 바뀐 행 — 쓰지 않음
             else:
                 stats["empty_result"] += 1  # stage 유지 — 실패 목록은 SQL로 조회
         conn.commit()
+        stats.setdefault("stale_skipped", 0)
         print(dict(stats))
         cur.execute("select stage, count(*) from collected_products group by stage order by 1")
         print("stage:", dict(cur.fetchall()))

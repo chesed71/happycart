@@ -1,7 +1,7 @@
 """upload_promoted_product RPC + dry-run 분류 테스트 (rollback-wrapped).
 
 운영 업로드의 핵심 불변식을 검증한다: verified 가드, barcode 충돌, 멱등, dry-run 분류.
-RPC 테스트는 로컬 happycart(운영과 동일 스키마)에서 트랜잭션 후 rollback 한다.
+RPC 테스트는 전용 테스트 DB happycart_test(testdb.connect_test)에서 트랜잭션 후 rollback 한다. 운영 happycart 에는 연결하지 않는다.
 
 사용: pipeline/.venv/bin/python test_upload.py
 참고: PR #6 리뷰 대응 (HIGH 1·2, MEDIUM 1·4)
@@ -16,7 +16,7 @@ import tempfile
 import psycopg
 
 import promote
-from common import dsn
+from testdb import connect_test, source_dsn
 from upload_prod import classify_dryrun, ingredients_hash, master_key, writeback_attachments
 
 results = []
@@ -53,7 +53,7 @@ def _call(cur, master, barcodes):
 
 
 def test_rpc_insert_and_idempotent():
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         m = _master(brand="UPLOADTEST_INS")
         bcs = [{"barcode": B1, "size": "10g", "image_url": None, "image_source_url": None}]
@@ -71,7 +71,7 @@ def test_rpc_insert_and_idempotent():
 
 
 def test_rpc_verified_held():
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         # 같은 master_key(brand·name·원재료)의 verified master를 먼저 둔다
         m = _master(brand="UPLOADTEST_VER")
@@ -91,7 +91,7 @@ def test_rpc_renamed_held():
     """운영에서 이름이 바뀐 같은 상품(같은 brand+원재료) master 가 기존 바코드를 가지면, 신규 바코드가
     섞여도 새 master 를 만들지 않고 renamed_held(0020). verified·unverified 모두."""
     for status in ("verified", "unverified"):
-        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
             cur.execute("begin")
             m = dict(_master(brand="UPLOADTEST_RN", ing="i-rn"), name="새이름")
             cur.execute("""insert into product_masters
@@ -115,7 +115,7 @@ def test_rpc_locks_owner_master():
     """RPC 가 입력 바코드 소유 master 를 잠가, 업로드 트랜잭션 동안 운영 이름 변경이 끼어들지 못한다(0020)."""
     import psycopg.errors
     brand = "UPLOADTEST_LOCK"
-    setup = psycopg.connect(dsn())
+    setup = connect_test(source_dsn())
     try:
         with setup.cursor() as cur:  # 두 연결이 보도록 커밋된 픽스처
             cur.execute("""insert into product_masters
@@ -124,7 +124,7 @@ def test_rpc_locks_owner_master():
             mid = cur.fetchone()[0]
             cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, mid))
         setup.commit()
-        with psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+        with connect_test(source_dsn()) as a, connect_test(source_dsn()) as b:
             with a.cursor() as ca:
                 ca.execute("begin")
                 # 원재료가 다른 업로드라 M 과 master_key 충돌이 없다 — M 을 잠그는 건 0020 의 FOR UPDATE 뿐.
@@ -155,7 +155,7 @@ def _wait_lock_wait(pid, timeout=10.0):
     """backend pid 가 잠금 대기(wait_event_type='Lock')에 들어갈 때까지 기다린다 — sleep 대신 실제 대기 확인."""
     import time
     deadline = time.time() + timeout
-    with psycopg.connect(dsn(), autocommit=True) as c, c.cursor() as cur:
+    with connect_test(source_dsn(), autocommit=True) as c, c.cursor() as cur:
         while time.time() < deadline:
             cur.execute("select wait_event_type from pg_stat_activity where pid=%s", (pid,))
             r = cur.fetchone()
@@ -178,7 +178,7 @@ def test_rpc_serializes_same_ingredients_uploads():
     b_m = dict(_master(brand=brand, ing="i-race"), name="이름B")
     out = {}
     try:
-        with psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+        with connect_test(source_dsn()) as a, connect_test(source_dsn()) as b:
             ca, cb = a.cursor(), b.cursor()
             ca.execute("begin")
             check("race: 앞 요청 inserted", _call(ca, a_m, [bc(B1)])["master_status"] == "inserted")
@@ -196,11 +196,11 @@ def test_rpc_serializes_same_ingredients_uploads():
             rb = out.get("b", {})
             check("race: 뒤 요청은 renamed_held", rb.get("master_status") == "renamed_held",
                   str(rb.get("master_status")) + " " + str(rb.get("barcodes")))
-            with psycopg.connect(dsn()) as c, c.cursor() as cur:
+            with connect_test(source_dsn()) as c, c.cursor() as cur:
                 cur.execute("select count(*) from product_masters where brand=%s", (brand,))
                 check("race: master 1개만(갈라짐 없음)", cur.fetchone()[0] == 1)
     finally:
-        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
             cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
             cur.execute("delete from product_masters where brand=%s", (brand,))
 
@@ -217,7 +217,7 @@ def test_rpc_cross_upload_no_deadlock():
     bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
     errs, res = {}, {}
     try:
-        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
             ids = {}
             for nm, ing, b in (("N1", "i-dl-1", B1), ("N2", "i-dl-2", B2)):
                 cur.execute("""insert into product_masters
@@ -225,7 +225,7 @@ def test_rpc_cross_upload_no_deadlock():
                     values (%s,%s,%s,'okay','v1',now(),'t',now()) returning id""", (brand, nm, ing))
                 ids[nm] = cur.fetchone()[0]
                 cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (b, ids[nm]))
-        with psycopg.connect(dsn()) as hold, psycopg.connect(dsn()) as a, psycopg.connect(dsn()) as b:
+        with connect_test(source_dsn()) as hold, connect_test(source_dsn()) as a, connect_test(source_dsn()) as b:
             h = hold.cursor()
             h.execute("select 1 from product_masters where id=%s for update", (ids["N1"],))
 
@@ -248,14 +248,14 @@ def test_rpc_cross_upload_no_deadlock():
             check("deadlock: 데드락 없음", not errs, str({k: str(v)[:60] for k, v in errs.items()}))
             check("deadlock: 두 업로드 모두 완료", set(res) == {"A", "B"}, str(sorted(res)))
     finally:
-        with psycopg.connect(dsn()) as c, c.cursor() as cur:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
             cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
             cur.execute("delete from product_masters where brand=%s", (brand,))
 
 
 def test_rpc_same_ingredients_different_name():
     """같은 brand+원재료라도 name 이 다르면 별도 master 로 insert(0019 master_key)."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         a = dict(_master(brand="UPLOADTEST_NM"), name="오디")
         b = dict(_master(brand="UPLOADTEST_NM"), name="오미자")
@@ -274,7 +274,7 @@ def test_rpc_same_ingredients_different_name():
 
 def test_rpc_barcode_conflict_empty_held():
     """신규 master인데 유일 바코드가 충돌 → 빈 master 정리(empty_held), 미생성."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         a = _master(brand="UPLOADTEST_A", ing="i-a")
         _call(cur, a, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
@@ -292,7 +292,7 @@ def test_rpc_barcode_conflict_empty_held():
 
 def test_rpc_mixed_barcode():
     """신규 master + 바코드 2개(하나 충돌, 하나 신규) → master 유지, attached 1."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         a = _master(brand="UPLOADTEST_A2", ing="i-a2")
         _call(cur, a, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
@@ -413,7 +413,7 @@ def test_lottemartzetta_image_lookup():
 def test_writeback_row_scoped():
     """회귀 잠금: 같은 barcode를 가진 promoted 행 2개에서, writeback이 대상 행(id)만
     갱신하고 다른 행은 NULL 유지. (barcode 기준이면 둘 다 찍혀 실패 → 그 버그를 잠근다)"""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
