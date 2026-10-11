@@ -231,9 +231,20 @@ def load_image_manifest() -> dict:
         return {e["barcode"]: e for e in json.load(f)}
 
 
+def image_object_path(barcode, data: bytes) -> str:
+    """올릴 바이트의 SHA-256 앞 16자로 만든 Storage 객체 경로. 내용이 같으면 경로가 같고 다르면 달라서,
+    운영이 이미 참조하는 객체를 덮어쓰지 않는다."""
+    return f"products/{barcode}-{hashlib.sha256(data).hexdigest()[:16]}.jpg"
+
+
+def storage_already_exists(status: int, body: str) -> bool:
+    """Storage 가 '이미 있는 경로'라고 답했는지. 경로가 내용 해시라 이미 있으면 같은 내용이다."""
+    return status == 409 or (status == 400 and ("Duplicate" in body or "already exists" in body))
+
+
 class StorageUploader:
     """RestTarget 과 같은 자격증명(SUPABASE_URL + SERVICE_ROLE_KEY)을 urllib 로 써서
-    Storage 에 JPEG 를 업로드하고 공개 URL 을 돌려준다. x-upsert 로 재실행 멱등."""
+    Storage 에 JPEG 를 업로드하고 공개 URL 을 돌려준다. x-upsert 없이 올리므로 기존 객체를 덮어쓰지 않는다."""
 
     def __init__(self):
         self.url = os.environ.get("SUPABASE_URL", "").strip('"').rstrip("/")
@@ -243,22 +254,22 @@ class StorageUploader:
     def public_url(self, storage_target: str) -> str:
         return f"{self.url}/storage/v1/object/public/{STORAGE_BUCKET}/{storage_target}"
 
-    def upload(self, local_path: str, storage_target: str) -> str:
-        with open(local_path, "rb") as fh:
-            data = fh.read()
+    def upload_bytes(self, data: bytes, object_path: str) -> str:
         req = urllib.request.Request(
-            f"{self.url}/storage/v1/object/{STORAGE_BUCKET}/{storage_target}",
+            f"{self.url}/storage/v1/object/{STORAGE_BUCKET}/{object_path}",
             method="POST", data=data)
         req.add_header("apikey", self.key)
         req.add_header("Authorization", f"Bearer {self.key}")
         req.add_header("Content-Type", "image/jpeg")
-        req.add_header("x-upsert", "true")
         try:
             with urllib.request.urlopen(req) as resp:
                 resp.read()
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"storage {storage_target} → {e.code} {e.read().decode()[:200]}")
-        return self.public_url(storage_target)
+            body = e.read().decode(errors="replace")
+            if storage_already_exists(e.code, body):
+                return self.public_url(object_path)
+            raise RuntimeError(f"storage {object_path} → {e.code} {body[:200]}")
+        return self.public_url(object_path)
 
 
 def enrich_images(entries, manifest, uploader, stats, dry_run):
@@ -279,7 +290,9 @@ def enrich_images(entries, manifest, uploader, stats, dry_run):
             stats["image_skipped_no_creds"] += 1
             continue
         try:
-            e["image_url"] = uploader.upload(man["local_path"], man["storage_target"])
+            with open(man["local_path"], "rb") as fh:
+                data = fh.read()
+            e["image_url"] = uploader.upload_bytes(data, image_object_path(e["barcode"], data))
             if not e.get("image_source_url"):
                 e["image_source_url"] = man.get("source_url")
             writeback.append((e["barcode"], e["image_url"]))

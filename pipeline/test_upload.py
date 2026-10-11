@@ -1059,6 +1059,157 @@ def test_writeback_generation_and_barcode_conditions():
         conn.rollback()
 
 
+# ── 이미지: 내용 해시 경로·덮어쓰기 없음 ───────────────────────────────────────────
+class _FakeUploader:
+    """호출된 (경로, 바이트)를 기록한다. 이미 받은 경로는 성공(같은 내용이므로)."""
+    enabled = True
+
+    def __init__(self):
+        self.calls, self.seen = [], set()
+
+    def upload_bytes(self, data, object_path):
+        self.calls.append((object_path, data))
+        self.seen.add(object_path)
+        return "https://fake.test/" + object_path
+
+
+def test_image_object_path():
+    import hashlib
+    d = b"\xff\xd8jpeg-bytes"
+    p1, p2 = upload_prod.image_object_path(B1, d), upload_prod.image_object_path(B1, d)
+    check("image_object_path: 같은 바이트 같은 경로", p1 == p2, p1)
+    check("image_object_path: sha256 앞 16자",
+          p1 == f"products/{B1}-{hashlib.sha256(d).hexdigest()[:16]}.jpg", p1)
+    check("image_object_path: 1바이트 다르면 다른 경로", upload_prod.image_object_path(B1, d + b"x") != p1)
+
+
+def test_storage_already_exists():
+    f = upload_prod.storage_already_exists
+    check("exists: 409", f(409, "") is True)
+    check("exists: 400 Duplicate", f(400, '{"error":"Duplicate"}') is True)
+    check("exists: 400 already exists", f(400, "The resource already exists") is True)
+    check("exists: 400 다른 문구", f(400, "bad request") is False)
+    check("exists: 500", f(500, "Duplicate") is False)
+
+
+def test_enrich_images_hash_path():
+    from collections import Counter
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "x.jpg")
+        man = {B1: {"barcode": B1, "local_path": path, "source_url": "http://src",
+                    "storage_target": f"products/{B1}.jpg"}}
+        up = _FakeUploader()
+
+        def run():
+            e = {"barcode": B1, "image_url": None, "image_source_url": None}
+            wb = upload_prod.enrich_images([e], man, up, Counter(), False)
+            return e, wb
+        with open(path, "wb") as f:
+            f.write(b"first-content")
+        e, wb = run()
+        want = upload_prod.image_object_path(B1, b"first-content")
+        check("enrich hash: 해시 경로로 업로드", [c[0] for c in up.calls] == [want], str(up.calls))
+        check("enrich hash: 올린 바이트 = 파일 바이트", up.calls[0][1] == b"first-content")
+        check("enrich hash: 옛 고정 경로 미사용", all(c[0] != f"products/{B1}.jpg" for c in up.calls))
+        check("enrich hash: image_url·writeback", e["image_url"].endswith(want) and wb == [(B1, e["image_url"])], str(wb))
+        with open(path, "wb") as f:
+            f.write(b"changed-content")
+        run()
+        want2 = upload_prod.image_object_path(B1, b"changed-content")
+        check("enrich hash: 파일이 바뀌면 바뀐 내용의 해시 경로", up.calls[-1][0] == want2 and want2 != want, str(up.calls[-1][0]))
+        n = len(up.calls)
+        e3, _ = run()
+        check("enrich hash: 같은 내용 두 번째도 성공", len(up.calls) == n + 1 and bool(e3["image_url"]))
+
+
+def test_upload_bytes_http_request():
+    import io
+    import urllib.error
+    data = b"\xff\xd8http-bytes"
+    path = upload_prod.image_object_path(B1, data)
+    seen = []
+
+    def make(status, body):
+        def fake(req, *a, **k):
+            seen.append(req)
+            if status == 200:
+                return io.BytesIO(b"{}")
+            raise urllib.error.HTTPError(req.full_url, status, "x", {}, io.BytesIO(body.encode()))
+        return fake
+    up = upload_prod.StorageUploader()
+    up.url, up.key, up.enabled = "https://sb.test", "k", True
+    orig = upload_prod.urllib.request.urlopen
+    try:
+        for label, status, body, ok in [("성공", 200, "", True), ("409", 409, "", True),
+                                        ("Duplicate 400", 400, "Duplicate", True), ("500", 500, "boom", False)]:
+            seen.clear()
+            upload_prod.urllib.request.urlopen = make(status, body)
+            try:
+                url, err = up.upload_bytes(data, path), None
+            except Exception as ex:  # noqa: BLE001
+                url, err = None, ex
+            req = seen[0]
+            check(f"http({label}): x-upsert 헤더 없음", "x-upsert" not in {k.lower() for k, _ in req.header_items()})
+            check(f"http({label}): URL 객체 경로", req.full_url.endswith("/product-images/" + path), req.full_url)
+            check(f"http({label}): 본문 바이트", req.data == data)
+            if ok:
+                check(f"http({label}): 공개 URL", url == f"https://sb.test/storage/v1/object/public/product-images/{path}", str(url))
+            else:
+                check(f"http({label}): 예외", err is not None and url is None)
+    finally:
+        upload_prod.urllib.request.urlopen = orig
+
+
+def test_held_keeps_prod_image():
+    """보류·충돌 결과에서도 운영의 기존 image_url 은 그대로고, 새 업로드는 해시 경로뿐이다."""
+    data = b"\xff\xd8held-new-image"
+    new_path = upload_prod.image_object_path(U1, data)
+    old = "https://old.test/products/old.jpg"
+    cases = ["verified_held", "review_held", "renamed_held", "empty_held"]
+    for case in cases:
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티H", [U1])])
+            target = _HookTarget()
+            with connect_test(source_dsn()) as src:
+                masters, bcs, _ = fetch_promoted(src, ids=list(rows.values()))
+                (local_id, vals), = masters.items()
+                payload = [{"barcode": U1, "size": "10g", "image_url": old, "image_source_url": None}]
+            if case == "renamed_held":
+                target.upload(dict(vals, name="업티H운영이름"), payload)
+            elif case == "empty_held":
+                target.upload(dict(vals, name="업티남", ingredients_raw="upt99-다른원재료",
+                                   ingredients_tokens=["다른"]), payload)
+            else:
+                target.upload(vals, payload)
+                with target.conn.cursor() as cur:
+                    cur.execute("update product_masters set verified_status=%s where brand=%s",
+                                ("verified" if case == "verified_held" else "needs_review", UP_BRAND))
+                target.conn.commit()
+            with tempfile.TemporaryDirectory() as d:
+                fp = os.path.join(d, "u1.jpg")
+                with open(fp, "wb") as f:
+                    f.write(data)
+                man = {U1: {"barcode": U1, "local_path": fp, "source_url": "http://s",
+                            "storage_target": f"products/{U1}.jpg"}}
+                up = _FakeUploader()
+                with connect_test(source_dsn()) as src:
+                    stats = upload_prod.run_upload(src, target, ids=list(rows.values()), manifest=man, uploader=up)
+            check(f"held({case}): 해당 보류 결과", stats.get(f"master_{case}") == 1
+                  or (case == "empty_held" and stats.get("barcode_conflict") == 1), str(dict(stats)))
+            with connect_test(target_dsn()) as c, c.cursor() as cur:
+                cur.execute("select image_url from product_barcodes where barcode=%s", (U1,))
+                got = cur.fetchone()[0]
+            check(f"held({case}): 운영 image_url 그대로", got == old, str(got))
+            check(f"held({case}): 업로드 경로는 새 해시 경로뿐",
+                  [c[0] for c in up.calls] == [new_path], str([c[0] for c in up.calls]))
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
@@ -1074,7 +1225,9 @@ def main():
               test_receipt_rows_mapping, test_writeback_generation_and_barcode_conditions,
               test_per_master_commit_and_rollback, test_first_master_committed_before_next,
               test_resume_after_remote_commit, test_redemote_repromote_regeneration,
-              test_inflight_regeneration_not_filled, test_legacy_null_promoted_at]:
+              test_inflight_regeneration_not_filled, test_legacy_null_promoted_at,
+              test_image_object_path, test_storage_already_exists, test_enrich_images_hash_path,
+              test_upload_bytes_http_request, test_held_keeps_prod_image]:
         try:
             t()
         except Exception as e:  # noqa
