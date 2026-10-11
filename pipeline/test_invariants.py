@@ -261,6 +261,55 @@ def test_promote_locks_during_review():
             cl.commit()
 
 
+def test_candidate_query_unscoped_equals_constant():
+    from promote import CANDIDATE_SELECT, candidate_query
+    sql, params = candidate_query()
+    check("범위 없으면 SQL이 상수와 동일", sql == CANDIDATE_SELECT)
+    check("범위 없으면 인자 비어 있음", list(params) == [])
+    sql2, p2 = candidate_query(ids=["x"], source="cp")
+    check("범위 SQL은 for update 유지", "for update" in sql2 and len(p2) == 2)
+
+
+def test_promote_scoped_lock_allows_other_review():
+    """범위를 준 승격은 범위 안 후보만 잠근다: 범위 밖(P2) 검수는 통과, 범위 안(P1) 검수는 대기."""
+    from promote import candidate_query
+    with connect_test(source_dsn()) as s, s.cursor() as sc:
+        sc.execute("begin")
+        p1 = _fixture(sc, stage="judged", review_decision="verified", barcode="8801037088168")
+        p2 = _fixture(sc, stage="judged", review_decision="verified", barcode="8801037088175")
+        s.commit()
+    try:
+        promoter = connect_test(source_dsn())
+        pc = promoter.cursor()
+        pc.execute("begin")
+        sql, params = candidate_query(ids=[str(p1)])
+        pc.execute(sql, params)
+        got = {str(r[0]) for r in pc.fetchall()}
+        check("범위 조회 결과에 P1만", got == {str(p1)}, str(got))
+        with connect_test(review_dsn()) as c2conn, c2conn.cursor() as c2:
+            c2.execute("set statement_timeout='2s'")
+            try:
+                c2.execute("select public.review_collected_product(%s,%s,%s,%s,%s,%s)",
+                           (p2, "8801037088175", "x", "high", "verified", ""))
+                c2conn.commit()
+                check("범위 밖 P2 검수 저장 성공", True)
+            except psycopg.Error as e:
+                check("범위 밖 P2 검수 저장 성공", False, str(e)[:60])
+                c2conn.rollback()
+            try:
+                c2.execute("select public.review_collected_product(%s,%s,%s,%s,%s,%s)",
+                           (p1, "8801037088168", "x", "high", "verified", ""))
+                check("범위 안 P1 검수는 대기", False, "대기 안 함")
+            except psycopg.Error as e:
+                check("범위 안 P1 검수는 대기", "timeout" in str(e).lower(), str(e)[:40])
+        promoter.rollback()
+        pc.close(); promoter.close()
+    finally:
+        with connect_test(source_dsn()) as cl, cl.cursor() as cc:
+            cc.execute("delete from collected_products where id = any(%s)", ([p1, p2],))
+            cl.commit()
+
+
 def test_rollback_shared_master():
     """rollback 실제 실행: verified/non-verified 가 공유한 master 에서 verified 보존."""
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
@@ -1127,6 +1176,8 @@ def test_bootstrap_guard():
 def main():
     for t in [test_testdb_guard, test_bootstrap_guard, test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
+              test_candidate_query_unscoped_equals_constant,
+              test_promote_scoped_lock_allows_other_review,
               test_rollback_scope, test_rollback_shared_master,
               test_rollback_shared_barcode, test_rollback_divergent_owner,
               test_rollback_preserves_merged_child, test_no_clobber,
