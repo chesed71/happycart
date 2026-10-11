@@ -82,6 +82,9 @@ psql_db < "$REPO_ROOT"/supabase/migrations/0020_*.sql
 echo "==> 0021 upload RPC 기존 master 불변 (0020 뒤)"
 psql_db < "$REPO_ROOT"/supabase/migrations/0021_*.sql
 
+echo "==> 0022 approve_service_products (0015 product_masters 의존이라 0021 뒤)"
+psql_db < "$REPO_ROOT"/supabase/migrations/0022_*.sql
+
 echo "==> collected_products (local-only)"
 psql_db < "$REPO_ROOT/pipeline/sql/collected_products.sql"
 
@@ -94,7 +97,7 @@ psql_db < "$REPO_ROOT/pipeline/sql/upload_receipts.sql"
 echo "==> rollback function (local-only, no-op on fresh DB)"
 psql_db < "$REPO_ROOT/pipeline/sql/rollback_ungated_promotions.sql"
 
-echo "==> check upload_promoted_product 버전 (0021 이상)"
+echo "==> check upload_promoted_product 버전 (0021 이상) + approve_service_products (0022)"
 if [[ "$(docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -tA -c \
       "select prosrc like '%review_held%' from pg_proc where oid = 'public.upload_promoted_product(jsonb, jsonb)'::regprocedure")" != "t" ]]; then
   echo "upload_promoted_product가 0021 버전이 아닙니다(review_held 없음)." >&2
@@ -103,6 +106,11 @@ fi
 if [[ "$(docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -tA -c \
       "select public.upload_promoted_product_version()")" != "21" ]]; then
   echo "upload_promoted_product_version()이 없거나 21이 아닙니다." >&2
+  exit 1
+fi
+if [[ "$(docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -tA -c \
+      "select to_regprocedure('public.approve_service_products(jsonb)') is not null")" != "t" ]]; then
+  echo "approve_service_products(jsonb)가 없습니다(0022 미적용)." >&2
   exit 1
 fi
 
