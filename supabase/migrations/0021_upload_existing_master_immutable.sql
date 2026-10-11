@@ -103,6 +103,8 @@ begin
       if v_id is not null then
         v_inserted := true;
       else
+        -- do nothing 뒤 이 재조회 사이에 그 행이 지워지면 v_id 가 NULL 로 남고, 아래 바코드 insert 가
+        -- master_id NOT NULL 위반으로 실패해 호출 전체가 롤백된다(안전한 실패).
         select id, verified_status into v_id, v_vstatus
         from public.product_masters where master_key = v_key
         for update;
@@ -163,4 +165,6 @@ end;
 $$;
 
 revoke all on function public.upload_promoted_product(jsonb, jsonb) from public;
+revoke all on function public.upload_promoted_product(jsonb, jsonb) from anon;
+revoke all on function public.upload_promoted_product(jsonb, jsonb) from authenticated;
 grant execute on function public.upload_promoted_product(jsonb, jsonb) to service_role;

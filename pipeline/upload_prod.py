@@ -6,11 +6,28 @@
   - verified 가드를 변경문에 박아 read-then-write 경쟁 제거
   - 따라서 클라이언트는 직접 INSERT/PATCH 하지 않는다 (HIGH 1·2 대응)
 
-이미지: image_url 이 비어있는 승격 바코드는 prepare_images.py 가 정리한
-JPEG(work/images/products/<barcode>.jpg + manifest)를 운영 Storage(product-images)에
-올리고 그 공개 URL 을 image_url 로 채워 RPC payload 에 실어 보낸다. 성공분은 로컬
-product_barcodes.image_url 에도 되써 재실행 시 재업로드를 피한다. (Storage 업로드는
-SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY 필요 — 없으면 image 단계만 건너뛴다.)
+범위:
+  - 기본: stage='promoted' 이고 prod_master_id 가 NULL 인 행이 하나라도 있는 master (미연결분만)
+  - --ids: 그 collected_products.id 중 승격 행의 master 만
+  - --all: 이미 연결된 master 포함 모든 승격 master
+  고른 master 는 이미 연결된 형제 행을 포함해 그 master 의 모든 승격 바코드를 보낸다.
+
+영수증: master 하나의 RPC 가 끝나면 LOCAL 트랜잭션 하나로 바코드(행)마다 upload_receipts 에 결과를
+남기고, 운영에 실제로 붙은 행(inserted·existing·exists)에만 collected_products.prod_master_id 를
+기록해 커밋한다. 업로드가 읽은 승격 세대(promoted_at)·바코드가 그대로일 때만 기록한다. RPC 가
+실패하면 그 master 의 행마다 error 영수증을 남기고 다음 master 로 넘어간다. 중간에 멈춰도 다음
+기본 실행이 미연결분만 다시 보내고, RPC(0021)가 이미 된 연결을 exists 로 돌려줘 기록이 채워진다.
+
+이미지: image_url 이 비어있는 승격 바코드는 prepare_images.py 가 정리한 JPEG(manifest 의
+local_path)를 운영 Storage(product-images)의 products/<barcode>-<업로드 바이트 SHA-256 앞 16자>.jpg
+경로에 덮어쓰기 없이(x-upsert 없음) 올리고 그 공개 URL 을 image_url 로 채워 RPC payload 에 실어
+보낸다. 운영이 그 바코드를 실제로 새로 받은(바코드 결과 inserted) 경우에만 로컬
+product_barcodes.image_url 에 되쓴다. (Storage 업로드는 SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+필요 — 없으면 image 단계만 건너뛴다.)
+
+배포 순서: ① 운영 Supabase 에 0021 마이그레이션 → ② LOCAL 에 pipeline/sql/upload_receipts.sql DDL →
+③ 이 코드. 실행 시 LOCAL 에 upload_receipts 가 없으면 RPC 를 하나도 부르지 않고 멈추고, 운영 RPC 가
+0021 밖의 master 결과(예: 0020 의 updated)를 돌려주면 그 master 의 LOCAL 기록 전에 멈춘다.
 
 백엔드 2종 (둘 다 같은 RPC 호출):
   - REST (기본): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (DB 비번 불필요)
@@ -21,6 +38,8 @@ SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY 필요 — 없으면 image 단계만 �
 사용:
   .venv/bin/python upload_prod.py --dry-run
   .venv/bin/python upload_prod.py
+  .venv/bin/python upload_prod.py --ids <uuid,uuid>
+  .venv/bin/python upload_prod.py --all
   .venv/bin/python upload_prod.py --target-dsn <dsn>
 """
 from __future__ import annotations
@@ -321,6 +340,15 @@ def writeback_attachments(cur, attach_rows):
 
 
 ATTACHED_RESULTS = ("inserted", "existing", "exists")
+# RPC 0021 이 돌려주는 master 결과 전부. 이 밖(예: 0020 의 updated)이면 운영 RPC 가 0021 이 아니다.
+RPC_MASTER_STATUSES = ("inserted", "existing", "review_held", "verified_held", "renamed_held", "empty_held")
+
+
+def local_has_upload_receipts(src) -> bool:
+    """LOCAL(원본)에 upload_receipts 테이블이 있는지(읽기만)."""
+    with src.cursor() as cur:
+        cur.execute("select to_regclass('public.upload_receipts') is not null")
+        return cur.fetchone()[0]
 
 
 def receipt_rows(local_id, entries, res):
@@ -410,6 +438,8 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
         manifest = load_image_manifest()
     if uploader is None:
         uploader = StorageUploader()
+    if not dry_run and not local_has_upload_receipts(src):
+        raise SystemExit("LOCAL에 upload_receipts가 없습니다 — pipeline/sql/upload_receipts.sql 먼저 적용")
 
     masters, bc_by_master, skipped = fetch_promoted(src, ids=ids, all_=all_)
     stats["skipped_ids"] = len(skipped)
@@ -446,6 +476,11 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
                     insert_receipts(cur, run_id, err_rows, error=msg)
                 src.commit()
                 continue
+            if res.get("master_status") not in RPC_MASTER_STATUSES:
+                # 0020 이 아직 운영에 있으면 updated 등이 온다 — 이 master 의 LOCAL 기록을 쓰기 전에 멈춘다.
+                raise SystemExit(f"운영 RPC가 0021이 아닙니다 (master_status={res.get('master_status')!r},"
+                                 f" {vals['brand']} / {vals['name']}) — 운영에 0021 을 먼저 적용."
+                                 " 이 master 는 운영에 반영됐을 수 있으나 LOCAL 기록은 남기지 않았습니다")
         stats[f"master_{res['master_status']}"] += 1
         if res["master_status"] == "verified_held":
             print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
@@ -468,8 +503,12 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
         with src.cursor() as cur:
             insert_receipts(cur, run_id, rows)
             written = writeback_attachments(cur, attach)
-            # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피)
+            # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피).
+            # 운영이 그 URL 을 실제로 받은 경우(바코드 결과 inserted)만 — 보류·exists 는 운영 값이 따로 있다.
+            took_url = {b["barcode"] for b in res["barcodes"] if b["status"] == "inserted"}
             for barcode, image_url in image_writeback:
+                if barcode not in took_url:
+                    continue
                 cur.execute("update product_barcodes set image_url=%s where barcode=%s",
                             (image_url, barcode))
         src.commit()
