@@ -794,7 +794,7 @@ def _row_state(rid):
                     (rid,))
         allr = cur.fetchall()
         cur.execute("""select r.result from upload_receipts r join collected_products c
-                         on c.id = r.collected_id and r.promoted_at = c.promoted_at
+                         on c.id = r.collected_id and r.promoted_at is not distinct from c.promoted_at
                        where c.id=%s order by r.id desc limit 1""", (rid,))
         cur_r = cur.fetchone()
     return pm, allr, (cur_r[0] if cur_r else None)
@@ -994,6 +994,34 @@ def test_inflight_regeneration_not_filled():
         _cleanup_upload()
 
 
+def test_legacy_null_promoted_at():
+    """promoted_at 이 없는 옛 승격 행도 기본 선택에 잡히고, 연결 기록과 promoted_at NULL 영수증이 남는다."""
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티L", [U1])])
+        rid = rows[U1]
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("update collected_products set promoted_at = null where id=%s", (rid,))
+            c.commit()
+            masters, bcs, _ = fetch_promoted(c)
+            check("legacy: 기본 선택에 잡힘",
+                  any(e["collected_id"] == rid and e["promoted_at"] is None for v in bcs.values() for e in v))
+        target = _HookTarget()
+        stats = _run(target)
+        pm, allr, cur_r = _row_state(rid)
+        check("legacy: prod_master_id = 운영 owner", pm is not None and str(pm) == str(_target_owner(U1)), str(pm))
+        check("legacy: 현재 영수증 inserted", cur_r == "inserted", f"{cur_r} {allr}")
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("select promoted_at from upload_receipts where collected_id=%s", (rid,))
+            check("legacy: 영수증 promoted_at NULL", cur.fetchall() == [(None,)])
+        check("legacy: stale_writeback 없음", not stats.get("stale_writeback"), str(dict(stats)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
 def test_writeback_generation_and_barcode_conditions():
     """기록 조건을 따로 증명: 같은 세대에서 바코드만 바뀜 → 0행, 같은 바코드로 세대만 바뀜 → 0행, 둘 다 같음 → 1행."""
     pm_id = "22222222-2222-2222-2222-222222222222"
@@ -1021,6 +1049,10 @@ def test_writeback_generation_and_barcode_conditions():
         check("writeback 조건: 세대만 바뀌면 NULL 유지", prod() is None)
         cur.execute("update collected_products set promoted_at=%s where id=%s", (pat, rid))
 
+        # 읽은 세대가 NULL(옛 승격 행)인데 그사이 재승격돼 promoted_at 이 생기면 0행
+        n = writeback_attachments(cur, [(pm_id, rid, mid, None, bc)])
+        check("writeback 조건: 읽은 NULL 세대 ≠ 현재 세대면 0행", n == 0, str(n))
+
         n = writeback_attachments(cur, item)
         check("writeback 조건: 둘 다 같으면 1행", n == 1, str(n))
         check("writeback 조건: 기록됨", str(prod()) == pm_id)
@@ -1042,7 +1074,7 @@ def main():
               test_receipt_rows_mapping, test_writeback_generation_and_barcode_conditions,
               test_per_master_commit_and_rollback, test_first_master_committed_before_next,
               test_resume_after_remote_commit, test_redemote_repromote_regeneration,
-              test_inflight_regeneration_not_filled]:
+              test_inflight_regeneration_not_filled, test_legacy_null_promoted_at]:
         try:
             t()
         except Exception as e:  # noqa

@@ -2,7 +2,9 @@
 -- 적용 순서: collected_products.sql, review_rpc.sql(datadesk_review 롤 생성) 이후.
 --
 -- 행의 현재 업로드 상태 = 같은 collected_id 이고 promoted_at 이 그 행의 현재 promoted_at 과
--- 같은 영수증 중 순번(id)이 가장 큰 것. 재승격하면 promoted_at 이 바뀌어 옛 영수증은 자동으로 낡은 것이 된다.
+-- IS NOT DISTINCT FROM 인 영수증 중 순번(id)이 가장 큰 것. 재승격하면 promoted_at 이 바뀌어 옛 영수증은
+-- 자동으로 낡은 것이 된다. promoted_at 이 없는 옛 승격 행(promoted_at 기록 이전 승격)은 NULL 끼리 같은
+-- 세대로 본다.
 
 create table if not exists public.upload_receipts (
   id bigserial primary key,
@@ -10,7 +12,7 @@ create table if not exists public.upload_receipts (
   collected_id uuid not null,                    -- collected_products.id
   local_master_id uuid not null,
   barcode text not null,
-  promoted_at timestamptz not null,              -- 업로드 때 읽은 승격 시각
+  promoted_at timestamptz,                       -- 업로드 때 읽은 승격 시각(옛 승격 행은 NULL)
   result text not null check (result in (
     'inserted', 'existing', 'exists', 'conflict',
     'verified_held', 'review_held', 'renamed_held', 'empty_held', 'error'

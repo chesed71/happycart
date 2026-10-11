@@ -294,13 +294,14 @@ def writeback_attachments(cur, attach_rows):
     """붙은 행에만 prod_master_id 기록하고 실제로 쓴 행 수를 돌려준다.
     행 식별자(id) 기준이라 같은 barcode를 가진 다른 promoted 행(conflict/held)은 건드리지 않는다.
     업로드가 읽은 승격 세대(promoted_at)와 바코드가 지금도 같을 때만 쓴다 — 업로드 도중 행이
-    취소·수정·재승격됐으면 옛 응답이 새 세대를 채우지 않는다.
+    취소·수정·재승격됐으면 옛 응답이 새 세대를 채우지 않는다. promoted_at 이 없는 옛 승격 행은
+    NULL 끼리 같은 세대로 본다(is not distinct from).
     attach_rows: [(prod_master_id, collected_id, local_master_id, promoted_at, barcode), ...]"""
     written = 0
     for prod_id, cid, local_id, promoted_at, barcode in attach_rows:
         cur.execute("""update collected_products set prod_master_id=%s
                        where id=%s and promoted_master_id=%s and stage='promoted'
-                         and promoted_at=%s and barcode=%s""",
+                         and promoted_at is not distinct from %s and barcode=%s""",
                     (prod_id, cid, local_id, promoted_at, barcode))
         written += cur.rowcount
     return written
