@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
 import psycopg
 
 import promote
-from testdb import connect_test, source_dsn
-from upload_prod import classify_dryrun, ingredients_hash, master_key, writeback_attachments
+import upload_prod
+from testdb import connect_test, source_dsn, target_dsn
+from upload_prod import classify_dryrun, fetch_promoted, ingredients_hash, master_key, writeback_attachments
 
 results = []
 
@@ -60,9 +62,9 @@ def test_rpc_insert_and_idempotent():
         r1 = _call(cur, m, bcs)
         check("RPC 신규 master inserted", r1["master_status"] == "inserted", r1["master_status"])
         check("RPC 신규 barcode inserted", r1["barcodes"][0]["status"] == "inserted")
-        # 멱등: 같은 걸 다시 → updated + barcode exists
+        # 멱등: 같은 걸 다시 → existing + barcode exists
         r2 = _call(cur, m, bcs)
-        check("RPC 재실행 master updated", r2["master_status"] == "updated", r2["master_status"])
+        check("RPC 재실행 master existing", r2["master_status"] == "existing", r2["master_status"])
         check("RPC 재실행 barcode exists", r2["barcodes"][0]["status"] == "exists")
         check("RPC 멱등: id 동일", r1["master_id"] == r2["master_id"])
         cur.execute("select count(*) from product_barcodes where barcode=%s", (B1,))
@@ -265,9 +267,9 @@ def test_rpc_same_ingredients_different_name():
               ra["master_status"] == "inserted" and rb["master_status"] == "inserted",
               f'{ra["master_status"]}/{rb["master_status"]}')
         check("이름 다른 master id 분리", ra["master_id"] != rb["master_id"])
-        # 이름이 같으면 기존 master 재사용(updated)
+        # 이름이 같으면 기존 master 재사용(existing)
         rc = _call(cur, dict(a), [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
-        check("같은 이름은 기존 master 재사용", rc["master_id"] == ra["master_id"] and rc["master_status"] == "updated",
+        check("같은 이름은 기존 master 재사용", rc["master_id"] == ra["master_id"] and rc["master_status"] == "existing",
               rc["master_status"])
         conn.rollback()
 
@@ -310,10 +312,231 @@ def test_rpc_mixed_barcode():
         conn.rollback()
 
 
+# 0020 이 같은 master_key 의 unverified master 에 덮어쓰던 내용 컬럼 전부(0021 부터 불변).
+_CONTENT_COLS = ("category", "ingredients_tokens", "bad_ingredients_detected", "good_ingredients_detected",
+                 "verdict_reason_codes", "verdict", "rule_version", "computed_at", "source", "source_url",
+                 "source_checked_at")
+
+
+def _snapshot(cur, mid):
+    cur.execute(f"select {', '.join(_CONTENT_COLS)}, updated_at from product_masters where id=%s", (mid,))
+    row = cur.fetchone()
+    return row[:-1], row[-1]
+
+
+def _hand_edit(cur, mid):
+    """운영 데스크에서 사람이 고친 것처럼 내용 컬럼 전부를 _master() 입력과 다른 값으로 바꾼다."""
+    cur.execute("""update product_masters set category='수동분류', ingredients_tokens='{수동토큰}',
+        bad_ingredients_detected='{수동나쁨}', good_ingredients_detected='{수동좋음}',
+        verdict_reason_codes='{MANUAL}', verdict='not_okay', rule_version='v-manual',
+        computed_at='2020-01-01T00:00:00Z', source='수동', source_url='https://manual.example',
+        source_checked_at='2020-01-01T00:00:00Z' where id=%s""", (mid,))
+
+
+def test_rpc_unverified_existing_immutable():
+    """같은 master_key 의 unverified master: 내용 컬럼 불변, 결과 existing, 새 바코드가 붙을 때만 updated_at 갱신(0021).
+
+    커밋형 — updated_at 은 트랜잭션 시작 시각(now())이라 한 트랜잭션 안에서는 바뀌었는지 볼 수 없다."""
+    brand = "UPLOADTEST_IMM"
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    m = _master(brand=brand, ing="i-imm")
+    try:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+            mid = _call(cur, m, [bc(B1)])["master_id"]
+            conn.commit()
+            _hand_edit(cur, mid)
+            conn.commit()
+            snap, snap_at = _snapshot(cur, mid)
+            conn.commit()
+            check("immutable: 준비 값이 입력과 모두 다름",
+                  all(a != b for a, b in zip(snap, (m["category"], m["ingredients_tokens"], m["bad_ingredients_detected"],
+                                                    m["good_ingredients_detected"], m["verdict_reason_codes"], m["verdict"],
+                                                    m["rule_version"], None, m["source"], m["source_url"], None))))
+
+            r = _call(cur, m, [bc(B1)])
+            conn.commit()
+            check("immutable: 기존 바코드만 → existing", r["master_status"] == "existing", r["master_status"])
+            check("immutable: master_id 동일", str(r["master_id"]) == str(mid))
+            check("immutable: B1 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+            now_snap, now_at = _snapshot(cur, mid)
+            conn.commit()
+            check("immutable: 내용 컬럼 전부 불변", now_snap == snap, f"{now_snap} != {snap}")
+            check("immutable: 새 바코드 없으면 updated_at 불변", now_at == snap_at, f"{now_at} != {snap_at}")
+
+            r = _call(cur, m, [bc(B1), bc(B2)])
+            conn.commit()
+            check("immutable: B1·B2 → existing", r["master_status"] == "existing", r["master_status"])
+            sm = {x["barcode"]: x["status"] for x in r["barcodes"]}
+            check("immutable: B1 exists·B2 inserted", sm == {B1: "exists", B2: "inserted"}, str(sm))
+            cur.execute("select master_id from product_barcodes where barcode=%s", (B2,))
+            check("immutable: B2 가 그 master 에 연결", str(cur.fetchone()[0]) == str(mid))
+            now_snap, now_at = _snapshot(cur, mid)
+            conn.commit()
+            check("immutable: 바코드가 붙어도 내용 컬럼 불변", now_snap == snap, f"{now_snap} != {snap}")
+            check("immutable: 새 바코드가 붙으면 updated_at 갱신", now_at > snap_at, f"{now_at} <= {snap_at}")
+    finally:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_review_held():
+    """needs_review master: master·바코드 모두 쓰지 않고 review_held, 이미 그 master 소속 바코드는 exists(0021).
+
+    커밋형 — 운영에서 손으로 고친 내용이 다시 부른 뒤에도 남는지, updated_at 이 그대로인지를 별 트랜잭션에서 본다."""
+    brand = "UPLOADTEST_REV"
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    m = _master(brand=brand, ing="i-rev")
+    try:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+            mid = _call(cur, m, [bc(B1)])["master_id"]
+            conn.commit()
+            _hand_edit(cur, mid)
+            cur.execute("update product_masters set verified_status='needs_review' where id=%s", (mid,))
+            conn.commit()
+            snap, snap_at = _snapshot(cur, mid)
+            conn.commit()
+            check("review_held: 준비 값이 입력과 모두 다름",
+                  all(a != b for a, b in zip(snap, (m["category"], m["ingredients_tokens"], m["bad_ingredients_detected"],
+                                                    m["good_ingredients_detected"], m["verdict_reason_codes"], m["verdict"],
+                                                    m["rule_version"], None, m["source"], m["source_url"], None))))
+            r = _call(cur, m, [bc(B1), bc(B2)])
+            conn.commit()
+            check("review_held", r["master_status"] == "review_held", r["master_status"])
+            check("review_held: master_id 는 그 master", str(r["master_id"]) == str(mid))
+            check("review_held: B1 만 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+            cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+            check("review_held: B2 미연결", cur.fetchone()[0] is False)
+            now_snap, now_at = _snapshot(cur, mid)
+            cur.execute("select verified_status::text from product_masters where id=%s", (mid,))
+            vs = cur.fetchone()[0]
+            conn.commit()
+            check("review_held: 손으로 고친 내용 컬럼 유지", now_snap == snap, f"{now_snap} != {snap}")
+            check("review_held: updated_at 불변(별 트랜잭션)", now_at == snap_at, f"{now_at} != {snap_at}")
+            check("review_held: 상태 needs_review 유지", vs == "needs_review", vs)
+    finally:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_execute_revoked():
+    """0021 실행 권한: anon·authenticated 는 실행 불가, service_role 만 실행(0018 과 같은 회수). 버전 함수도 같다."""
+    for dsn_fn in (source_dsn, target_dsn):
+        with connect_test(dsn_fn()) as c, c.cursor() as cur:
+            db = c.execute("select current_database()").fetchone()[0]
+            for fn in ("public.upload_promoted_product(jsonb, jsonb)", "public.upload_promoted_product_version()"):
+                short = fn.split("(")[0].split(".")[1]
+                for role, want in (("anon", False), ("authenticated", False), ("service_role", True)):
+                    cur.execute("select has_function_privilege(%s, %s, 'execute')", (role, fn))
+                    got = cur.fetchone()[0]
+                    check(f"0021 권한({db}) {short}: {role} execute={want}", got is want, str(got))
+            c.rollback()
+
+
+def test_rpc_locks_same_key_master_appearing_late():
+    """첫 잠금 조회 뒤에 생긴 같은 master_key master 도 RPC 가 잠그고 읽는다(0021 for update).
+
+    연결2 가 입력 바코드 소유 master(다른 원재료) 를 잡아 RPC(연결1) 를 첫 잠금 조회에서 멈춘 사이,
+    연결3 이 같은 master_key 의 unverified master 를 만들고 커밋한 뒤 그 행을 for update 로 잡는다. 연결2 를 풀면
+    RPC 는 첫 조회 스냅숏에 없던 그 master 를 같은 키 조회에서 잠그려다 연결3 을 기다려야 하고, 연결3 이
+    needs_review 로 바꿔 커밋하면 바뀐 상태를 읽어 review_held 가 된다. 잠그지 않으면 옛 unverified 로 읽어
+    existing 이 된다."""
+    import threading
+    import time
+    brand = "UPLOADTEST_LATE"
+    m = _master(brand=brand, ing="i-late")
+    out = {}
+
+    def blocked_by(pid, blocker, timeout=10.0):
+        deadline = time.time() + timeout
+        with connect_test(source_dsn(), autocommit=True) as c, c.cursor() as cur:
+            while time.time() < deadline:
+                cur.execute("select %s = any(pg_blocking_pids(%s))", (blocker, pid))
+                if cur.fetchone()[0]:
+                    return True
+                time.sleep(0.05)
+        return False
+    try:
+        with connect_test(source_dsn()) as s0, s0.cursor() as cur:
+            cur.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,'다른','i-late-other','okay','v1',now(),'t',now(),'unverified') returning id""", (brand,))
+            other = cur.fetchone()[0]
+            cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, other))
+        with connect_test(source_dsn()) as c1, connect_test(source_dsn()) as c2, connect_test(source_dsn()) as c3:
+            k2, k3 = c2.cursor(), c3.cursor()
+            k2.execute("select 1 from product_masters where id=%s for update", (other,))
+
+            def run1():
+                with c1.cursor() as k1:
+                    out["r"] = _call(k1, m, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+                c1.commit()
+            t = threading.Thread(target=run1)
+            t.start()
+            check("late-key: RPC 가 첫 잠금 조회에서 연결2 대기", blocked_by(c1.info.backend_pid, c2.info.backend_pid))
+            k3.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,%s,%s,'okay','v1',now(),'t',now(),'unverified') returning id""",
+                       (brand, m["name"], m["ingredients_raw"]))
+            late = k3.fetchone()[0]
+            c3.commit()
+            k3.execute("select 1 from product_masters where id=%s for update", (late,))
+            c2.rollback()
+            check("late-key: RPC 가 늦게 생긴 같은 키 master 에서 연결3 대기",
+                  blocked_by(c1.info.backend_pid, c3.info.backend_pid))
+            k3.execute("update product_masters set verified_status='needs_review' where id=%s", (late,))
+            c3.commit()
+            t.join(timeout=30)
+            r = out.get("r") or {}
+            check("late-key: 바뀐 상태를 읽어 review_held", r.get("master_status") == "review_held"
+                  and str(r.get("master_id")) == str(late), str(r))
+            with c3.cursor() as k:
+                k.execute("select master_id from product_barcodes where barcode=%s", (B1,))
+                check("late-key: B1 은 원래 master 그대로", str(k.fetchone()[0]) == str(other))
+                c3.rollback()
+    finally:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
+
+
+def test_rpc_held_returns_existing_links():
+    """verified_held·renamed_held 도 입력 바코드 중 이미 그 master 소속인 것만 exists 로 돌려준다(0021)."""
+    bc = lambda b: {"barcode": b, "size": "1", "image_url": None, "image_source_url": None}
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        m = _master(brand="UPLOADTEST_HV", ing="i-hv")
+        mid = _call(cur, m, [bc(B1)])["master_id"]
+        cur.execute("update product_masters set verified_status='verified' where id=%s", (mid,))
+        r = _call(cur, m, [bc(B1), bc(B2)])
+        check("held(verified): verified_held", r["master_status"] == "verified_held", r["master_status"])
+        check("held(verified): master_id", str(r["master_id"]) == str(mid))
+        check("held(verified): B1 만 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+        check("held(verified): B2 미연결", cur.fetchone()[0] is False)
+        conn.rollback()
+
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        m = _master(brand="UPLOADTEST_HR", ing="i-hr")
+        mid = _call(cur, m, [bc(B1)])["master_id"]
+        cur.execute("update product_masters set name='운영에서바뀐이름' where id=%s", (mid,))
+        r = _call(cur, m, [bc(B1), bc(B2)])
+        check("held(renamed): renamed_held", r["master_status"] == "renamed_held", r["master_status"])
+        check("held(renamed): master_id 는 이름이 바뀐 master", str(r["master_id"]) == str(mid))
+        check("held(renamed): B1 만 exists", r["barcodes"] == [{"barcode": B1, "status": "exists"}], str(r["barcodes"]))
+        cur.execute("select exists(select 1 from product_barcodes where barcode=%s)", (B2,))
+        check("held(renamed): B2 미연결", cur.fetchone()[0] is False)
+        cur.execute("select count(*) from product_masters where brand=%s", (m["brand"],))
+        check("held(renamed): 새 master 미생성", cur.fetchone()[0] == 1)
+        conn.rollback()
+
+
 class _StubTarget:
     """dry-run 분류 단위 테스트용 — DB 없이 plan/owner를 흉내낸다."""
-    def __init__(self, existing_id, verified, owners, owner_masters=()):
-        self._e, self._v, self._owners = existing_id, verified, owners
+    def __init__(self, existing_id, vstatus, owners, owner_masters=()):
+        self._e, self._v, self._owners = existing_id, vstatus, owners
         self._owner_masters = list(owner_masters)
     def plan_master(self, vals):
         return self._e, self._v
@@ -328,38 +551,48 @@ def test_dryrun_classify():
     bcs = [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None},
            {"barcode": B2, "size": "1", "image_url": None, "image_source_url": None}]
     # 신규 master + B1 미존재, B2는 다른 master 소속 → inserted / inserted+conflict
-    r = classify_dryrun(_StubTarget(None, False, {B2: "other-master"}), vals, bcs)
+    r = classify_dryrun(_StubTarget(None, None, {B2: "other-master"}), vals, bcs)
     check("dry-run 신규 master=inserted", r["master_status"] == "inserted")
     bcmap = {b["barcode"]: b["status"] for b in r["barcodes"]}
     check("dry-run 신규 barcode=inserted", bcmap[B1] == "inserted")
     check("dry-run 타소속 barcode=conflict", bcmap[B2] == "conflict")
-    # 기존 verified master → held. 계약: barcodes는 빈 배열 (RPC와 동일)
-    r2 = classify_dryrun(_StubTarget("mid", True, {B1: "mid"}), vals, bcs)
+    # 기존 verified master → held. 그 master 소속 바코드만 exists (RPC 0021 과 동일)
+    r2 = classify_dryrun(_StubTarget("mid", "verified", {B1: "mid", B2: "other"}), vals, bcs)
     check("dry-run verified=held", r2["master_status"] == "verified_held")
-    check("dry-run verified: barcodes 빈 배열", r2["barcodes"] == [], r2["barcodes"])
-    # 기존 unverified master, B1이 그 master 소속 → updated, exists
-    r3 = classify_dryrun(_StubTarget("mid", False, {B1: "mid"}), vals, bcs)
-    check("dry-run 기존 unverified=updated", r3["master_status"] == "updated")
+    check("dry-run verified: 소속 바코드만 exists", r2["barcodes"] == [{"barcode": B1, "status": "exists"}],
+          str(r2["barcodes"]))
+    check("dry-run verified: master_id", r2["master_id"] == "mid")
+    # 기존 unverified master, B1이 그 master 소속 → existing(updated 아님), exists / inserted
+    r3 = classify_dryrun(_StubTarget("mid", "unverified", {B1: "mid"}), vals, bcs)
+    check("dry-run 기존 unverified=existing", r3["master_status"] == "existing", r3["master_status"])
     bcmap3 = {b["barcode"]: b["status"] for b in r3["barcodes"]}
     check("dry-run 동일소속 barcode=exists", bcmap3[B1] == "exists")
     check("dry-run 미존재 barcode=inserted", bcmap3[B2] == "inserted")
+    # needs_review → review_held, 그 master 소속 바코드만 exists, 새 연결 없음
+    r3b = classify_dryrun(_StubTarget("mid", "needs_review", {B1: "mid"}), vals, bcs)
+    check("dry-run needs_review=review_held", r3b["master_status"] == "review_held", r3b["master_status"])
+    check("dry-run review_held: 소속 바코드만 exists, 신규 연결 없음",
+          r3b["barcodes"] == [{"barcode": B1, "status": "exists"}] and r3b["master_id"] == "mid",
+          str(r3b["barcodes"]))
     # 신규 master인데 모든 barcode가 타소속 → empty_held
-    r4 = classify_dryrun(_StubTarget(None, False, {B1: "o", B2: "o"}), vals, bcs)
+    r4 = classify_dryrun(_StubTarget(None, None, {B1: "o", B2: "o"}), vals, bcs)
     check("dry-run 전부충돌 신규=empty_held", r4["master_status"] == "empty_held")
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
     # 입력 바코드가 '같은 brand+원재료, 다른 이름' master 소속 → renamed_held (RPC 0020 과 동일)
     renamed_owner = ("old-mid", ingredients_hash(vals["brand"], vals["ingredients_raw"]),
                      master_key(vals["brand"], "옛이름", vals["ingredients_raw"]))
-    r5 = classify_dryrun(_StubTarget(None, False, {B1: "old-mid"}, [renamed_owner]), vals, bcs)
+    r5 = classify_dryrun(_StubTarget(None, None, {B1: "old-mid"}, [renamed_owner]), vals, bcs)
     check("dry-run 이름바뀐 같은상품=renamed_held", r5["master_status"] == "renamed_held", r5["master_status"])
-    check("dry-run renamed_held: 바코드 미처리", r5["barcodes"] == [] and r5["master_id"] == "old-mid")
+    check("dry-run renamed_held: 이름 바뀐 master 소속 바코드만 exists",
+          r5["barcodes"] == [{"barcode": B1, "status": "exists"}] and r5["master_id"] == "old-mid",
+          str(r5["barcodes"]))
     # 원재료가 다른 master 소속이면 renamed 아님 → 기존 분류(B1 conflict, B2 inserted)
     other_owner = ("o", ingredients_hash(vals["brand"], "다른원재료"), "x")
-    r6 = classify_dryrun(_StubTarget(None, False, {B1: "o"}, [other_owner]), vals, bcs)
+    r6 = classify_dryrun(_StubTarget(None, None, {B1: "o"}, [other_owner]), vals, bcs)
     check("dry-run 원재료 다른 소유자=renamed 아님", r6["master_status"] == "inserted", r6["master_status"])
     # 같은 바코드가 payload 에 두 번 → RPC 처럼 inserted, exists
     dup = [bcs[0], dict(bcs[0])]
-    r7 = classify_dryrun(_StubTarget(None, False, {}), vals, dup)
+    r7 = classify_dryrun(_StubTarget(None, None, {}), vals, dup)
     check("dry-run 중복 바코드=inserted,exists",
           [b["status"] for b in r7["barcodes"]] == ["inserted", "exists"], str(r7["barcodes"]))
 
@@ -424,22 +657,1009 @@ def test_writeback_row_scoped():
         cur.execute("select id from product_masters where ingredients_raw='ia'"); ma = cur.fetchone()[0]
         # 같은 barcode B1을 가진 promoted 행 2개 (서로 다른 promoted_master_id)
         cur.execute("""insert into collected_products
-            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
-            values ('cp','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s)
-            returning id""", (B1, ma))
-        row_a = cur.fetchone()[0]
+            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,
+             promoted_master_id,promoted_at)
+            values ('cp','wb_a','{}'::jsonb,'WB','A','1',%s,'ia','high','promoted','verified',%s,now())
+            returning id, promoted_at""", (B1, ma))
+        row_a, pat_a = cur.fetchone()
         cur.execute("""insert into collected_products
-            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,promoted_master_id)
-            values ('cp','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s)
+            (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,review_decision,
+             promoted_master_id,promoted_at)
+            values ('cp','wb_b','{}'::jsonb,'WB','B','1',%s,'ib','high','promoted','verified',%s,now())
             returning id""", (B1, mb))
         row_b = cur.fetchone()[0]
         # row_a만 붙은 것으로 writeback
-        writeback_attachments(cur, [("11111111-1111-1111-1111-111111111111", row_a, ma)])
+        n = writeback_attachments(cur, [("11111111-1111-1111-1111-111111111111", row_a, ma, pat_a, B1)])
+        check("writeback: 쓴 행 수 1", n == 1, str(n))
         cur.execute("select prod_master_id from collected_products where id=%s", (row_a,))
         check("writeback: 대상 행(id) 기록", str(cur.fetchone()[0]) == "11111111-1111-1111-1111-111111111111")
         cur.execute("select prod_master_id from collected_products where id=%s", (row_b,))
         check("writeback: 같은 barcode 다른 행은 NULL 유지", cur.fetchone()[0] is None)
         conn.rollback()
+
+
+def _seed_promoted(cur, specs):
+    """원본 테스트 DB에 LOCAL master·바코드·승격 행을 만든다(호출자가 commit, _cleanup_promoted 로 삭제).
+    specs: [(master_label, [(barcode, linked_bool), ...]), ...] → ({label: master_id}, {barcode: row_id})"""
+    mids, rows = {}, {}
+    for label, items in specs:
+        cur.execute("""insert into product_masters
+            (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+            values ('FP99',%s,%s,'okay','v1',now(),'t',now(),'unverified') returning id""",
+                    (label, "fp99-" + label))
+        mids[label] = cur.fetchone()[0]
+        for bc, linked in items:
+            cur.execute("insert into product_barcodes (barcode, master_id, size) values (%s,%s,'1')",
+                        (bc, mids[label]))
+            cur.execute("""insert into collected_products
+                (source,source_ref,raw,brand,name,size,barcode,ingredients_raw,confidence,stage,
+                 review_decision,promoted_master_id,promoted_at,prod_master_id)
+                values ('cp',%s,'{}'::jsonb,'FP99',%s,'1',%s,%s,'high','promoted','verified',%s,now(),
+                        case when %s then gen_random_uuid() end) returning id""",
+                        ("fp99_" + bc, label, bc, "fp99-" + label, mids[label], linked))
+            rows[bc] = cur.fetchone()[0]
+    return mids, rows
+
+
+def _cleanup_promoted(cur, mids, rows):
+    cur.execute("delete from collected_products where id = any(%s)", (list(rows.values()),))
+    cur.execute("delete from product_barcodes where master_id = any(%s)", (list(mids.values()),))
+    cur.execute("delete from product_masters where id = any(%s)", (list(mids.values()),))
+
+
+FP1, FP2, FP3, FP4 = (_ean(f"99000000002{i}") for i in range(4))
+
+
+def _with_fetch_seed(fn):
+    with connect_test(source_dsn()) as conn:
+        cur = conn.cursor()
+        mids, rows = _seed_promoted(cur, [("M1", [(FP1, True), (FP2, False)]), ("M2", [(FP3, True)])])
+        # 승격이 아닌 행(검수 대기)
+        cur.execute("""insert into collected_products (source,source_ref,raw,brand,name,size,barcode,
+                ingredients_raw,confidence,stage) values ('cp','fp99_np','{}'::jsonb,'FP99','NP','1',%s,'x','high','judged')
+                returning id""", (FP4,))
+        rows[FP4] = cur.fetchone()[0]
+        conn.commit()
+        try:
+            fn(conn, mids, rows)
+        finally:
+            conn.rollback()
+            _cleanup_promoted(cur, mids, rows)
+            conn.commit()
+
+
+def test_fetch_scope_default():
+    def body(conn, mids, rows):
+        masters, bcs, skipped = fetch_promoted(conn)
+        check("fetch 기본: M1 포함", mids["M1"] in masters)
+        check("fetch 기본: 전부 연결된 M2 제외", mids["M2"] not in masters)
+        got = bcs.get(mids["M1"], [])
+        check("fetch 기본: M1 바코드 둘(연결된 형제 포함)", {e["barcode"] for e in got} == {FP1, FP2}, str(got))
+        check("fetch 기본: promoted_at 있음", all(e.get("promoted_at") is not None for e in got))
+        check("fetch 기본: skipped 없음", skipped == [])
+    _with_fetch_seed(body)
+
+
+def test_fetch_scope_ids():
+    def body(conn, mids, rows):
+        missing = "00000000-0000-0000-0000-000000000099"
+        masters, bcs, skipped = fetch_promoted(
+            conn, ids=[rows[FP3], rows[FP4], missing])
+        check("fetch ids: M2만", set(masters) == {mids["M2"]}, str(set(masters)))
+        check("fetch ids: 승격 아닌 행·없는 uuid가 skipped",
+              set(skipped) == {str(rows[FP4]), missing}, str(skipped))
+        masters, bcs, skipped = fetch_promoted(conn, ids=[rows[FP1], rows[FP2]])
+        check("fetch ids: 같은 master 한 번만", list(masters) == [mids["M1"]], str(list(masters)))
+        check("fetch ids: M1 바코드 둘", len(bcs[mids["M1"]]) == 2)
+        check("fetch ids: skipped 없음", skipped == [])
+    _with_fetch_seed(body)
+
+
+def test_fetch_scope_all():
+    def body(conn, mids, rows):
+        masters, _, _ = fetch_promoted(conn, all_=True)
+        check("fetch all: M1·M2", {mids["M1"], mids["M2"]} <= set(masters))
+    _with_fetch_seed(body)
+
+
+def test_fetch_scope_ids_empty():
+    def body(conn, mids, rows):
+        masters, bcs, skipped = fetch_promoted(conn, ids=[])
+        check("fetch ids=[]: master 없음(기본 범위로 넓어지지 않음)",
+              masters == {} and bcs == {} and skipped == [], str(list(masters)))
+    _with_fetch_seed(body)
+
+
+def test_cli_ids_empty():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for val in ("", ","):
+        r = subprocess.run([sys.executable, os.path.join(here, "upload_prod.py"), "--ids", val],
+                           capture_output=True, text=True, cwd=here, timeout=60)
+        check(f"CLI --ids {val!r}: 비정상 종료·DB 접속 전", r.returncode == 2 and "--ids" in r.stderr,
+              f"{r.returncode} {r.stderr[-150:]}")
+
+
+def test_cli_ids_all_exclusive():
+    here = os.path.dirname(os.path.abspath(__file__))
+    r = subprocess.run([sys.executable, os.path.join(here, "upload_prod.py"), "--ids",
+                        "00000000-0000-0000-0000-000000000001", "--all"],
+                       capture_output=True, text=True, cwd=here, timeout=60)
+    check("CLI --ids/--all 동시: 비정상 종료", r.returncode != 0, str(r.returncode))
+    check("CLI --ids/--all 동시: 오류에 두 옵션 이름", "--ids" in r.stderr and "--all" in r.stderr, r.stderr[-200:])
+
+
+def test_receipt_rows_mapping():
+    """RPC 결과 → 영수증 행(순수 함수): 바코드별 결과와 붙은 경우에만 prod_master_id."""
+    import datetime as dt
+    pat = dt.datetime(2026, 10, 11, tzinfo=dt.timezone.utc)
+    ent = lambda cid, bc: {"collected_id": cid, "barcode": bc, "size": "1", "image_url": None,
+                           "image_source_url": None, "promoted_at": pat}
+    entries = [ent("c1", B1), ent("c2", B2)]
+    cases = [
+        ("inserted/inserted", {"master_id": "pm", "master_status": "inserted",
+                               "barcodes": [{"barcode": B1, "status": "inserted"}, {"barcode": B2, "status": "inserted"}]},
+         [("inserted", "pm"), ("inserted", "pm")]),
+        ("existing/inserted", {"master_id": "pm", "master_status": "existing",
+                               "barcodes": [{"barcode": B1, "status": "inserted"}, {"barcode": B2, "status": "exists"}]},
+         [("existing", "pm"), ("exists", "pm")]),
+        ("held/exists", {"master_id": "pm", "master_status": "verified_held",
+                         "barcodes": [{"barcode": B1, "status": "exists"}]},
+         [("exists", "pm"), ("verified_held", None)]),
+        ("any/conflict", {"master_id": "pm", "master_status": "inserted",
+                          "barcodes": [{"barcode": B1, "status": "conflict"}, {"barcode": B2, "status": "inserted"}]},
+         [("conflict", None), ("inserted", "pm")]),
+        ("review_held 목록 없음", {"master_id": "pm", "master_status": "review_held", "barcodes": []},
+         [("review_held", None), ("review_held", None)]),
+        ("empty_held/conflict", {"master_id": None, "master_status": "empty_held",
+                                 "barcodes": [{"barcode": B1, "status": "conflict"}, {"barcode": B2, "status": "conflict"}]},
+         [("conflict", None), ("conflict", None)]),
+    ]
+    for label, res, want in cases:
+        rows = upload_prod.receipt_rows("lm", entries, res)
+        got = [(r["result"], r["prod_master_id"]) for r in rows]
+        check(f"receipt_rows {label}", got == want, str(got))
+        check(f"receipt_rows {label}: 행 식별 칸",
+              [(r["collected_id"], r["local_master_id"], r["barcode"], r["promoted_at"]) for r in rows]
+              == [("c1", "lm", B1, pat), ("c2", "lm", B2, pat)])
+
+
+# ── 업로드 루프 통합 테스트: 원본 happycart_test → 대상 happycart_test_target(PgTarget) ──────────
+UP_BRAND = "UPT99"
+U1, U2, U3, U4, U5 = (_ean(f"99000000003{i}") for i in range(5))
+ALL_U = [U1, U2, U3, U4, U5]
+
+
+class _Abort(BaseException):
+    """테스트 전용 중단 — run_upload 가 Exception 만 잡으므로 이 예외는 그대로 빠져나간다."""
+
+
+class _NoUploader:
+    enabled = False
+
+
+class _HookTarget(upload_prod.PgTarget):
+    """실제 PgTarget 연결로 RPC 를 부르되, 호출 앞(before)·뒤(after)에 테스트 동작을 끼운다.
+    before(n, master) 가 dict 를 돌려주면 그 master 로 호출한다. n 은 1부터 센 호출 순번."""
+
+    def __init__(self, before=None, after=None):
+        self.conn = connect_test(target_dsn())
+        self.before, self.after, self.calls = before, after, []
+
+    def upload(self, master, barcodes):
+        n = len(self.calls) + 1
+        self.calls.append(master["name"])
+        if self.before:
+            master = self.before(n, master) or master
+        res = super().upload(master, barcodes)
+        if self.after:
+            self.after(n, master, res)
+        return res
+
+
+def _judged_row(cur, barcode, name, ing):
+    """승격 가능한 judged 행(원본). source_ref 는 처음 바코드로 고정."""
+    cur.execute("""insert into collected_products
+        (source, source_ref, raw, brand, name, size, category, barcode, ingredients_raw, confidence,
+         ingredients_tokens, verdict, rule_version, computed_at, stage, review_decision,
+         bad_ingredients_detected, good_ingredients_detected, verdict_reason_codes)
+        values ('cp', %s, '{}'::jsonb, %s, %s, '10g', 'cat', %s, %s, 'high',
+                '{물}', 'okay'::verdict_enum, 'v1.1.0', now(), 'judged', 'verified', '{}', '{}', '{}')
+        returning id""", ("upt99_" + barcode, UP_BRAND, name, barcode, ing))
+    return cur.fetchone()[0]
+
+
+def _seed_upload(specs):
+    """specs: [(name, [barcode, ...]), ...] → 실제 run_promotion 으로 승격·커밋, {barcode: row_id}."""
+    from collections import Counter
+    rows = {}
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        for name, bcs in specs:
+            for bc in bcs:
+                rows[bc] = _judged_row(cur, bc, name, "upt99-" + name)
+        promote.run_promotion(cur, ids=[str(x) for x in rows.values()], stats=Counter())
+        c.commit()
+    return rows
+
+
+def _cleanup_upload():
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("""delete from upload_receipts where collected_id in
+                       (select id from collected_products where brand=%s)""", (UP_BRAND,))
+        cur.execute("delete from collected_products where brand=%s", (UP_BRAND,))
+        cur.execute("""delete from product_barcodes where barcode = any(%s)
+                       or master_id in (select id from product_masters where brand=%s)""", (ALL_U, UP_BRAND))
+        cur.execute("delete from product_masters where brand=%s", (UP_BRAND,))
+    with connect_test(target_dsn()) as c, c.cursor() as cur:
+        cur.execute("""delete from product_barcodes where barcode = any(%s)
+                       or master_id in (select id from product_masters where brand=%s)""", (ALL_U, UP_BRAND))
+        cur.execute("delete from product_masters where brand=%s", (UP_BRAND,))
+
+
+def _row_state(rid):
+    """(prod_master_id, [(result, prod_master_id, error)...] 전체 영수증, 현재 세대 최신 영수증 결과 or None)"""
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("select prod_master_id from collected_products where id=%s", (rid,))
+        pm = cur.fetchone()[0]
+        cur.execute("select result, prod_master_id, error from upload_receipts where collected_id=%s order by id",
+                    (rid,))
+        allr = cur.fetchall()
+        cur.execute("""select r.result from upload_receipts r join collected_products c
+                         on c.id = r.collected_id and r.promoted_at is not distinct from c.promoted_at
+                       where c.id=%s order by r.id desc limit 1""", (rid,))
+        cur_r = cur.fetchone()
+    return pm, allr, (cur_r[0] if cur_r else None)
+
+
+def _row_names(rows):
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("""select c.id, m.name from collected_products c join product_masters m
+                       on m.id = c.promoted_master_id where c.id = any(%s)""", (list(rows.values()),))
+        return {name: rid for rid, name in cur.fetchall()}
+
+
+def _target_owner(barcode):
+    with connect_test(target_dsn()) as c, c.cursor() as cur:
+        cur.execute("select master_id from product_barcodes where barcode=%s", (barcode,))
+        r = cur.fetchone()
+        return r[0] if r else None
+
+
+def _no_foreign_unlinked(label):
+    """기본 범위 실행 전 사전조건: 테스트 접두({UP_BRAND}) 외 미연결 승격 행이 0건이어야 한다.
+    아니면 기본 실행이 그 행까지 대상 DB 로 올려 결과가 오염되므로 FAIL 로 원인을 남기고 건너뛴다."""
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("""select count(*), coalesce(string_agg(distinct coalesce(brand, '(null)'), ', '), '')
+                       from collected_products
+                       where stage = 'promoted' and promoted_master_id is not null and prod_master_id is null
+                         and brand is distinct from %s""", (UP_BRAND,))
+        n, brands = cur.fetchone()
+    check(f"{label}: 사전조건 — {UP_BRAND} 외 미연결 승격 행 0건", n == 0,
+          f"{n}건(brand: {brands[:200]}) — 기본 범위 실행이 이 행까지 올리므로 테스트 DB 를 정리·재생성한 뒤 다시 실행")
+    return n == 0
+
+
+def _run(target, **kw):
+    with connect_test(source_dsn()) as src:
+        return upload_prod.run_upload(src, target, manifest={}, uploader=_NoUploader(), **kw)
+
+
+def test_per_master_commit_and_rollback():
+    """두 번째 RPC 가 DB 오류여도 PgTarget 이 rollback 해 세 번째 master 는 정상, 첫 master 기록은 남는다."""
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티A", [U1]), ("업티B", [U2]), ("업티C", [U3])])
+        by_name = _row_names(rows)
+        # 두 번째 호출에만 timestamptz 로 바뀌지 않는 값을 넣어 RPC 안에서 DB 오류를 낸다.
+        target = _HookTarget(before=lambda n, m: dict(m, computed_at="not-a-timestamp") if n == 2 else None)
+        stats = _run(target, ids=list(rows.values()))
+        check("per-master: RPC 세 번 호출", len(target.calls) == 3, str(target.calls))
+        for i, name in enumerate(target.calls):
+            rid = by_name[name]
+            bc = next(b for b, r in rows.items() if r == rid)
+            pm, allr, _ = _row_state(rid)
+            if i == 1:
+                check("per-master: 실패 master 는 prod_master_id 없음", pm is None, str(pm))
+                check("per-master: 실패 master 는 error 영수증만",
+                      [r[0] for r in allr] == ["error"] and allr[0][1] is None and bool(allr[0][2]), str(allr))
+            else:
+                owner = _target_owner(bc)
+                check(f"per-master: {i + 1}번째 master 연결 기록", pm is not None and str(pm) == str(owner),
+                      f"{pm} / {owner}")
+                check(f"per-master: {i + 1}번째 master inserted 영수증",
+                      [(r[0], str(r[1])) for r in allr] == [("inserted", str(owner))], str(allr))
+        check("per-master: master_error 1", stats.get("master_error") == 1, str(dict(stats)))
+        check("per-master: 대상 연결이 실패 상태로 남지 않음",
+              target.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE,
+              str(target.conn.info.transaction_status))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_first_master_committed_before_next():
+    """두 번째 RPC 시점에 별도 원본 연결로 보면 첫 master 의 연결·영수증이 이미 커밋돼 있다."""
+    _cleanup_upload()
+    target, seen = None, {}
+    try:
+        rows = _seed_upload([("업티A", [U1]), ("업티B", [U2])])
+        by_name = _row_names(rows)
+
+        def before(n, m):
+            if n == 2:
+                pm, allr, _ = _row_state(by_name[target.calls[0]])
+                seen["pm"], seen["receipts"] = pm, [r[0] for r in allr]
+                raise _Abort()
+        target = _HookTarget(before=before)
+        aborted = False
+        try:
+            _run(target, ids=list(rows.values()))
+        except _Abort:
+            aborted = True
+        check("immediate: 두 번째 RPC 에서 중단", aborted)
+        check("immediate: 두 번째 RPC 시점에 첫 master prod_master_id 보임", seen.get("pm") is not None, str(seen))
+        check("immediate: 두 번째 RPC 시점에 첫 master 영수증 보임", seen.get("receipts") == ["inserted"], str(seen))
+        pm, allr, _ = _row_state(by_name[target.calls[0]])
+        check("immediate: 중단 뒤에도 첫 master 기록 유지",
+              pm is not None and [r[0] for r in allr] == ["inserted"], f"{pm} {allr}")
+        pm2, allr2, _ = _row_state(by_name[target.calls[1]])
+        check("immediate: 두 번째 master 는 기록 없음", pm2 is None and allr2 == [], f"{pm2} {allr2}")
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_resume_after_remote_commit():
+    """운영 커밋 뒤 LOCAL 기록 전에 멈춘 상태 → 운영 master 그대로/verified/needs_review/이름 변경 → 기본 재실행이
+    이미 된 연결을 LOCAL 에 기록하고 현재 영수증은 exists."""
+    mutate = {
+        "그대로": None,
+        "verified": "update product_masters set verified_status='verified' where id=%s",
+        "needs_review": "update product_masters set verified_status='needs_review' where id=%s",
+        "이름변경": "update product_masters set name='운영에서바뀐이름' where id=%s",
+    }
+    _cleanup_upload()
+    if not _no_foreign_unlinked("resume"):
+        return
+    for label, sql in mutate.items():
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티R", [U1, U2])])
+            target = _HookTarget()
+            with connect_test(source_dsn()) as src:
+                masters, bcs, _ = fetch_promoted(src, ids=list(rows.values()))
+                (local_id, vals), = masters.items()
+                payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
+                           for e in bcs[local_id]]
+            first = target.upload(vals, payload)   # 운영 커밋, LOCAL 기록 없음
+            pm_id = first["master_id"]
+            if sql:
+                with target.conn.cursor() as cur:
+                    cur.execute(sql, (pm_id,))
+                target.conn.commit()
+            _run(target)
+            for bc, rid in rows.items():
+                pm, _, cur_r = _row_state(rid)
+                check(f"resume({label}) {bc[-2:]}: prod_master_id = 운영 master", str(pm) == str(pm_id), f"{pm} / {pm_id}")
+                check(f"resume({label}) {bc[-2:]}: 현재 영수증 exists", cur_r == "exists", str(cur_r))
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
+def test_redemote_repromote_regeneration():
+    """업로드로 연결된 행을 승격 취소 → 바코드 수정 → 재승격하면 prod_master_id 는 NULL, 기본 선택에 다시 잡히고
+    옛 영수증은 현재 상태가 아니다."""
+    from collections import Counter
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티D", [U1])])
+        rid = rows[U1]
+        target = _HookTarget()
+        _run(target, ids=[rid])
+        pm, allr, cur_r = _row_state(rid)
+        check("regen: 업로드 뒤 연결·inserted", pm is not None and cur_r == "inserted", f"{pm} {cur_r}")
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("select public.demote_collected_product(%s)", (rid,))
+            cur.execute("update collected_products set barcode=%s where id=%s", (U4, rid))
+            promote.run_promotion(cur, ids=[str(rid)], stats=Counter())
+            c.commit()
+        pm, allr, cur_r = _row_state(rid)
+        check("regen: 재승격 뒤 prod_master_id NULL", pm is None, str(pm))
+        check("regen: 옛 영수증은 남아 있음", len(allr) >= 1, str(allr))
+        check("regen: 현재 상태 영수증 없음", cur_r is None, str(cur_r))
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("select promoted_master_id from collected_products where id=%s", (rid,))
+            new_mid = cur.fetchone()[0]
+            masters, bcs, _ = fetch_promoted(c)
+            check("regen: 기본 선택에 다시 잡힘", new_mid in masters
+                  and [e["barcode"] for e in bcs[new_mid]] == [U4], str(list(masters)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_inflight_regeneration_not_filled():
+    """RPC 진행 중 그 행이 취소 → 바코드 수정 → 같은 LOCAL master 로 재승격되면, 옛 응답이 새 세대를 채우지 않는다."""
+    from collections import Counter
+    _cleanup_upload()
+    target, setup = None, {}
+    try:
+        rows = _seed_upload([("업티F", [U1, U2])])
+        r1, r2 = rows[U1], rows[U2]
+
+        def after(n, m, res):
+            with connect_test(source_dsn()) as c, c.cursor() as cur:
+                cur.execute("select promoted_master_id from collected_products where id=%s", (r1,))
+                setup["before"] = cur.fetchone()[0]
+                cur.execute("select public.demote_collected_product(%s)", (r1,))
+                cur.execute("update collected_products set barcode=%s where id=%s", (U3, r1))
+                promote.run_promotion(cur, ids=[str(r1)], stats=Counter())
+                cur.execute("select promoted_master_id, stage from collected_products where id=%s", (r1,))
+                setup["after"], setup["stage"] = cur.fetchone()
+                c.commit()
+        target = _HookTarget(after=after)
+        stats = _run(target, ids=[r1, r2])
+        check("inflight: 준비 — 재승격 뒤 같은 LOCAL master",
+              setup.get("before") is not None and setup.get("before") == setup.get("after")
+              and setup.get("stage") == "promoted", str(setup))
+        pm1, allr1, cur1 = _row_state(r1)
+        check("inflight: 새 세대 prod_master_id NULL", pm1 is None, str(pm1))
+        check("inflight: 새 세대 현재 영수증 없음", cur1 is None, f"{cur1} {allr1}")
+        pm2, _, cur2 = _row_state(r2)
+        check("inflight: 형제 행은 정상 기록", pm2 is not None and cur2 == "inserted", f"{pm2} {cur2}")
+        check("inflight: stale_writeback 1", stats.get("stale_writeback") == 1, str(dict(stats)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_legacy_null_promoted_at():
+    """promoted_at 이 없는 옛 승격 행도 기본 선택에 잡히고, 연결 기록과 promoted_at NULL 영수증이 남는다."""
+    _cleanup_upload()
+    if not _no_foreign_unlinked("legacy"):
+        return
+    target = None
+    try:
+        rows = _seed_upload([("업티L", [U1])])
+        rid = rows[U1]
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("update collected_products set promoted_at = null where id=%s", (rid,))
+            c.commit()
+            masters, bcs, _ = fetch_promoted(c)
+            check("legacy: 기본 선택에 잡힘",
+                  any(e["collected_id"] == rid and e["promoted_at"] is None for v in bcs.values() for e in v))
+        target = _HookTarget()
+        stats = _run(target)
+        pm, allr, cur_r = _row_state(rid)
+        check("legacy: prod_master_id = 운영 owner", pm is not None and str(pm) == str(_target_owner(U1)), str(pm))
+        check("legacy: 현재 영수증 inserted", cur_r == "inserted", f"{cur_r} {allr}")
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("select promoted_at from upload_receipts where collected_id=%s", (rid,))
+            check("legacy: 영수증 promoted_at NULL", cur.fetchall() == [(None,)])
+        check("legacy: stale_writeback 없음", not stats.get("stale_writeback"), str(dict(stats)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def test_writeback_generation_and_barcode_conditions():
+    """기록 조건을 따로 증명: 같은 세대에서 바코드만 바뀜 → 0행, 같은 바코드로 세대만 바뀜 → 0행, 둘 다 같음 → 1행."""
+    pm_id = "22222222-2222-2222-2222-222222222222"
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        mids, rows = _seed_promoted(cur, [("WG", [(U1, False)])])
+        rid, mid = rows[U1], mids["WG"]
+        cur.execute("select promoted_at, barcode from collected_products where id=%s", (rid,))
+        pat, bc = cur.fetchone()
+        item = [(pm_id, rid, mid, pat, bc)]
+
+        def prod():
+            cur.execute("select prod_master_id from collected_products where id=%s", (rid,))
+            return cur.fetchone()[0]
+
+        cur.execute("update collected_products set barcode=%s where id=%s", (U2, rid))
+        n = writeback_attachments(cur, item)
+        check("writeback 조건: 바코드만 바뀌면 0행", n == 0, str(n))
+        check("writeback 조건: 바코드만 바뀌면 NULL 유지", prod() is None)
+        cur.execute("update collected_products set barcode=%s where id=%s", (bc, rid))
+
+        cur.execute("update collected_products set promoted_at = promoted_at + interval '1 second' where id=%s", (rid,))
+        n = writeback_attachments(cur, item)
+        check("writeback 조건: 세대만 바뀌면 0행", n == 0, str(n))
+        check("writeback 조건: 세대만 바뀌면 NULL 유지", prod() is None)
+        cur.execute("update collected_products set promoted_at=%s where id=%s", (pat, rid))
+
+        # 읽은 세대가 NULL(옛 승격 행)인데 그사이 재승격돼 promoted_at 이 생기면 0행
+        n = writeback_attachments(cur, [(pm_id, rid, mid, None, bc)])
+        check("writeback 조건: 읽은 NULL 세대 ≠ 현재 세대면 0행", n == 0, str(n))
+
+        n = writeback_attachments(cur, item)
+        check("writeback 조건: 둘 다 같으면 1행", n == 1, str(n))
+        check("writeback 조건: 기록됨", str(prod()) == pm_id)
+        conn.rollback()
+
+
+# ── 이미지: 내용 해시 경로·덮어쓰기 없음 ───────────────────────────────────────────
+class _FakeUploader:
+    """호출된 (경로, 바이트)를 기록한다. 이미 받은 경로는 성공(같은 내용이므로)."""
+    enabled = True
+
+    def __init__(self):
+        self.calls, self.seen = [], set()
+
+    def upload_bytes(self, data, object_path):
+        self.calls.append((object_path, data))
+        self.seen.add(object_path)
+        return "https://fake.test/" + object_path
+
+
+def test_image_object_path():
+    import hashlib
+    d = b"\xff\xd8jpeg-bytes"
+    p1, p2 = upload_prod.image_object_path(B1, d), upload_prod.image_object_path(B1, d)
+    check("image_object_path: 같은 바이트 같은 경로", p1 == p2, p1)
+    check("image_object_path: sha256 앞 16자",
+          p1 == f"products/{B1}-{hashlib.sha256(d).hexdigest()[:16]}.jpg", p1)
+    check("image_object_path: 1바이트 다르면 다른 경로", upload_prod.image_object_path(B1, d + b"x") != p1)
+
+
+def test_storage_already_exists():
+    f = upload_prod.storage_already_exists
+    check("exists: 409", f(409, "") is True)
+    check("exists: 400 Duplicate", f(400, '{"error":"Duplicate"}') is True)
+    check("exists: 400 already exists", f(400, "The resource already exists") is True)
+    check("exists: 400 다른 문구", f(400, "bad request") is False)
+    check("exists: 500", f(500, "Duplicate") is False)
+
+
+def test_enrich_images_hash_path():
+    from collections import Counter
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "x.jpg")
+        man = {B1: {"barcode": B1, "local_path": path, "source_url": "http://src",
+                    "storage_target": f"products/{B1}.jpg"}}
+        up = _FakeUploader()
+
+        def run():
+            e = {"barcode": B1, "image_url": None, "image_source_url": None}
+            wb = upload_prod.enrich_images([e], man, up, Counter(), False)
+            return e, wb
+        with open(path, "wb") as f:
+            f.write(b"first-content")
+        e, wb = run()
+        want = upload_prod.image_object_path(B1, b"first-content")
+        check("enrich hash: 해시 경로로 업로드", [c[0] for c in up.calls] == [want], str(up.calls))
+        check("enrich hash: 올린 바이트 = 파일 바이트", up.calls[0][1] == b"first-content")
+        check("enrich hash: 옛 고정 경로 미사용", all(c[0] != f"products/{B1}.jpg" for c in up.calls))
+        check("enrich hash: image_url·writeback", e["image_url"].endswith(want) and wb == [(B1, e["image_url"])], str(wb))
+        with open(path, "wb") as f:
+            f.write(b"changed-content")
+        run()
+        want2 = upload_prod.image_object_path(B1, b"changed-content")
+        check("enrich hash: 파일이 바뀌면 바뀐 내용의 해시 경로", up.calls[-1][0] == want2 and want2 != want, str(up.calls[-1][0]))
+        n = len(up.calls)
+        e3, _ = run()
+        check("enrich hash: 같은 내용 두 번째도 성공", len(up.calls) == n + 1 and bool(e3["image_url"]))
+
+
+def test_upload_bytes_http_request():
+    import io
+    import urllib.error
+    data = b"\xff\xd8http-bytes"
+    path = upload_prod.image_object_path(B1, data)
+    seen = []
+
+    def make(status, body):
+        def fake(req, *a, **k):
+            seen.append(req)
+            if status == 200:
+                return io.BytesIO(b"{}")
+            raise urllib.error.HTTPError(req.full_url, status, "x", {}, io.BytesIO(body.encode()))
+        return fake
+    up = upload_prod.StorageUploader()
+    up.url, up.key, up.enabled = "https://sb.test", "k", True
+    orig = upload_prod.urllib.request.urlopen
+    try:
+        for label, status, body, ok in [("성공", 200, "", True), ("409", 409, "", True),
+                                        ("Duplicate 400", 400, "Duplicate", True), ("500", 500, "boom", False)]:
+            seen.clear()
+            upload_prod.urllib.request.urlopen = make(status, body)
+            try:
+                url, err = up.upload_bytes(data, path), None
+            except Exception as ex:  # noqa: BLE001
+                url, err = None, ex
+            req = seen[0]
+            check(f"http({label}): x-upsert 헤더 없음", "x-upsert" not in {k.lower() for k, _ in req.header_items()})
+            check(f"http({label}): URL 객체 경로", req.full_url.endswith("/product-images/" + path), req.full_url)
+            check(f"http({label}): 본문 바이트", req.data == data)
+            if ok:
+                check(f"http({label}): 공개 URL", url == f"https://sb.test/storage/v1/object/public/product-images/{path}", str(url))
+            else:
+                check(f"http({label}): 예외", err is not None and url is None)
+    finally:
+        upload_prod.urllib.request.urlopen = orig
+
+
+def _local_image(barcode):
+    with connect_test(source_dsn()) as c, c.cursor() as cur:
+        cur.execute("""select b.image_url from product_barcodes b join product_masters m on m.id = b.master_id
+                       where b.barcode=%s and m.brand=%s""", (barcode, UP_BRAND))
+        return cur.fetchone()[0]
+
+
+def test_image_writeback_only_inserted():
+    """LOCAL image_url 되쓰기는 그 바코드의 RPC 결과가 inserted 일 때만: 운영에 이미 붙은(exists) 바코드는 그대로."""
+    data = b"\xff\xd8writeback-image"
+    old = "https://old.test/products/old.jpg"
+    for case in ("inserted", "exists"):
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티I", [U1])])
+            target = _HookTarget()
+            if case == "exists":
+                with connect_test(source_dsn()) as src:
+                    masters, _, _ = fetch_promoted(src, ids=list(rows.values()))
+                    (_, vals), = masters.items()
+                target.upload(vals, [{"barcode": U1, "size": "10g", "image_url": old, "image_source_url": None}])
+            with tempfile.TemporaryDirectory() as d:
+                fp = os.path.join(d, "u1.jpg")
+                with open(fp, "wb") as f:
+                    f.write(data)
+                man = {U1: {"barcode": U1, "local_path": fp, "source_url": "http://s"}}
+                up = _FakeUploader()
+                with connect_test(source_dsn()) as src:
+                    stats = upload_prod.run_upload(src, target, ids=list(rows.values()), manifest=man, uploader=up)
+            check(f"writeback-img({case}): 바코드 결과", stats.get(f"barcode_{case}") == 1, str(dict(stats)))
+            check(f"writeback-img({case}): Storage 업로드 1회", len(up.calls) == 1, str(len(up.calls)))
+            got = _local_image(U1)
+            if case == "inserted":
+                want = "https://fake.test/" + upload_prod.image_object_path(U1, data)
+                check("writeback-img(inserted): LOCAL image_url = 올린 URL", got == want, str(got))
+            else:
+                check("writeback-img(exists): LOCAL image_url 그대로(NULL)", got is None, str(got))
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
+def test_held_keeps_prod_image():
+    """보류·충돌 결과에서도 운영의 기존 image_url 은 그대로고, 새 업로드는 해시 경로뿐이다."""
+    data = b"\xff\xd8held-new-image"
+    new_path = upload_prod.image_object_path(U1, data)
+    old = "https://old.test/products/old.jpg"
+    cases = ["verified_held", "review_held", "renamed_held", "empty_held"]
+    for case in cases:
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티H", [U1])])
+            target = _HookTarget()
+            with connect_test(source_dsn()) as src:
+                masters, bcs, _ = fetch_promoted(src, ids=list(rows.values()))
+                (local_id, vals), = masters.items()
+                payload = [{"barcode": U1, "size": "10g", "image_url": old, "image_source_url": None}]
+            if case == "renamed_held":
+                target.upload(dict(vals, name="업티H운영이름"), payload)
+            elif case == "empty_held":
+                target.upload(dict(vals, name="업티남", ingredients_raw="upt99-다른원재료",
+                                   ingredients_tokens=["다른"]), payload)
+            else:
+                target.upload(vals, payload)
+                with target.conn.cursor() as cur:
+                    cur.execute("update product_masters set verified_status=%s where brand=%s",
+                                ("verified" if case == "verified_held" else "needs_review", UP_BRAND))
+                target.conn.commit()
+            with tempfile.TemporaryDirectory() as d:
+                fp = os.path.join(d, "u1.jpg")
+                with open(fp, "wb") as f:
+                    f.write(data)
+                man = {U1: {"barcode": U1, "local_path": fp, "source_url": "http://s",
+                            "storage_target": f"products/{U1}.jpg"}}
+                up = _FakeUploader()
+                with connect_test(source_dsn()) as src:
+                    stats = upload_prod.run_upload(src, target, ids=list(rows.values()), manifest=man, uploader=up)
+            check(f"held({case}): 해당 보류 결과", stats.get(f"master_{case}") == 1
+                  or (case == "empty_held" and stats.get("barcode_conflict") == 1), str(dict(stats)))
+            with connect_test(target_dsn()) as c, c.cursor() as cur:
+                cur.execute("select image_url from product_barcodes where barcode=%s", (U1,))
+                got = cur.fetchone()[0]
+            check(f"held({case}): 운영 image_url 그대로", got == old, str(got))
+            check(f"held({case}): LOCAL image_url 되쓰기 없음", _local_image(U1) is None, str(_local_image(U1)))
+            check(f"held({case}): 업로드 경로는 새 해시 경로뿐",
+                  [c[0] for c in up.calls] == [new_path], str([c[0] for c in up.calls]))
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
+class _FakeTarget:
+    """RPC 를 부르지 않고 정해진 결과를 돌려주는 대상. calls 에 호출 master 이름을 남긴다."""
+
+    def __init__(self, status, version=21):
+        self.status, self.version, self.calls = status, version, []
+
+    def rpc_version(self):
+        return self.version
+
+    def upload(self, master, barcodes):
+        self.calls.append(master["name"])
+        return {"master_id": "33333333-3333-3333-3333-333333333333", "master_status": self.status,
+                "barcodes": [{"barcode": b["barcode"], "status": "inserted"} for b in barcodes]}
+
+
+def test_deploy_order_no_receipts_table():
+    """LOCAL 에 upload_receipts 가 없으면(존재 확인 False) RPC 를 하나도 부르지 않고 SystemExit."""
+    _cleanup_upload()
+    orig = upload_prod.local_has_upload_receipts
+    try:
+        rows = _seed_upload([("업티P1", [U1]), ("업티P2", [U2])])
+        target = _FakeTarget("inserted")
+        upload_prod.local_has_upload_receipts = lambda src: False
+        msg = None
+        try:
+            _run(target, ids=list(rows.values()))
+        except SystemExit as ex:
+            msg = str(ex)
+        check("배포순서(영수증 없음): SystemExit", msg is not None and "upload_receipts" in msg, str(msg))
+        check("배포순서(영수증 없음): RPC 0회", target.calls == [], str(target.calls))
+        upload_prod.local_has_upload_receipts = orig
+        with connect_test(source_dsn()) as c:
+            check("배포순서: 실제 테스트 DB 에는 upload_receipts 있음", orig(c) is True)
+        for bc, rid in rows.items():
+            pm, allr, _ = _row_state(rid)
+            check(f"배포순서(영수증 없음) {bc[-2:]}: 기록 없음", pm is None and allr == [], f"{pm} {allr}")
+    finally:
+        upload_prod.local_has_upload_receipts = orig
+        _cleanup_upload()
+
+
+def test_deploy_order_rpc_not_0021():
+    """운영 RPC 가 0021 밖의 결과(updated)를 돌려주면 첫 master 에서 SystemExit, 그 master 의 영수증·연결 없음."""
+    _cleanup_upload()
+    try:
+        rows = _seed_upload([("업티Q1", [U1]), ("업티Q2", [U2])])
+        target = _FakeTarget("updated")
+        msg = None
+        try:
+            _run(target, ids=list(rows.values()))
+        except SystemExit as ex:
+            msg = str(ex)
+        check("배포순서(0020): SystemExit", msg is not None and "0021" in msg, str(msg))
+        check("배포순서(0020): master 1개에서 멈춤", len(target.calls) == 1, str(target.calls))
+        for bc, rid in rows.items():
+            pm, allr, _ = _row_state(rid)
+            check(f"배포순서(0020) {bc[-2:]}: 영수증·prod_master_id 없음", pm is None and allr == [], f"{pm} {allr}")
+    finally:
+        _cleanup_upload()
+
+
+def test_deploy_order_rpc_version():
+    """운영 버전 함수가 없거나(None) 21 이 아니면 이미지 업로드·RPC 0회, 영수증 0건으로 SystemExit. 21 이면 통과."""
+    data = b"\xff\xd8version-image"
+    for version in (None, 20, 21):
+        _cleanup_upload()
+        try:
+            rows = _seed_upload([("업티V1", [U1]), ("업티V2", [U2])])
+            target = _FakeTarget("inserted", version=version)
+            with tempfile.TemporaryDirectory() as d:
+                fp = os.path.join(d, "u1.jpg")
+                with open(fp, "wb") as f:
+                    f.write(data)
+                up = _FakeUploader()
+                msg = None
+                try:
+                    with connect_test(source_dsn()) as src:
+                        upload_prod.run_upload(src, target, ids=list(rows.values()),
+                                               manifest={U1: {"barcode": U1, "local_path": fp}}, uploader=up)
+                except SystemExit as ex:
+                    msg = str(ex)
+            receipts = sum(len(_row_state(rid)[1]) for rid in rows.values())
+            if version == 21:
+                check("버전(21): 통과·RPC 2회·업로드 1회", msg is None and len(target.calls) == 2 and len(up.calls) == 1,
+                      f"{msg} {target.calls} {len(up.calls)}")
+            else:
+                check(f"버전({version}): SystemExit", msg is not None and "0021" in msg, str(msg))
+                check(f"버전({version}): RPC 0회·이미지 업로드 0회", target.calls == [] and up.calls == [],
+                      f"{target.calls} {len(up.calls)}")
+                check(f"버전({version}): 영수증 0건", receipts == 0, str(receipts))
+        finally:
+            _cleanup_upload()
+
+
+def test_pg_target_rpc_version():
+    """PgTarget 실제 대상 DB: version()=21, 함수가 없으면 None(트랜잭션 안에서 지운 뒤 rollback 으로 복원)."""
+    target = _HookTarget()
+    try:
+        check("PgTarget 버전 21", target.rpc_version() == 21)
+        with target.conn.cursor() as cur:
+            cur.execute("drop function public.upload_promoted_product_version()")
+        check("PgTarget 버전 함수 없음 → None", target.rpc_version() is None)
+        check("PgTarget 버전 확인 뒤 연결 idle",
+              target.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE)
+        check("PgTarget 버전 함수 복원(rollback)", target.rpc_version() == 21)
+    finally:
+        target.conn.close()
+
+
+def test_rest_target_rpc_version():
+    """RestTarget: 200 → 값, 404(PGRST202) → None, 그 밖 오류는 예외."""
+    import io
+    import urllib.error
+    orig = upload_prod.urllib.request.urlopen
+    env = {k: os.environ.get(k) for k in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")}
+    seen = []
+
+    def make(status, body):
+        def fake(req, *a, **k):
+            seen.append(req.full_url)
+            if status == 200:
+                return io.BytesIO(body.encode())
+            raise urllib.error.HTTPError(req.full_url, status, "x", {}, io.BytesIO(body.encode()))
+        return fake
+    try:
+        os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "https://sb.test", "k"
+        t = upload_prod.RestTarget()
+        upload_prod.urllib.request.urlopen = make(200, "21")
+        check("Rest 버전 200 → 21", t.rpc_version() == 21)
+        check("Rest 버전 경로", seen[-1] == "https://sb.test/rest/v1/rpc/upload_promoted_product_version", seen[-1])
+        upload_prod.urllib.request.urlopen = make(404, '{"code":"PGRST202","message":"Could not find the function"}')
+        check("Rest 버전 404 → None", t.rpc_version() is None)
+        upload_prod.urllib.request.urlopen = make(500, "boom")
+        try:
+            t.rpc_version()
+            raised = False
+        except RuntimeError:
+            raised = True
+        check("Rest 버전 500 → 예외", raised)
+    finally:
+        upload_prod.urllib.request.urlopen = orig
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_image_writeback_inflight_regeneration():
+    """RPC 진행 중 그 행이 같은 바코드로 취소·재승격되면 옛 응답의 이미지 URL 을 LOCAL 에 쓰지 않는다."""
+    from collections import Counter
+    data = b"\xff\xd8inflight-image"
+    _cleanup_upload()
+    target, setup = None, {}
+    try:
+        # 형제 행(U2)을 둬 취소 뒤에도 LOCAL master 가 남게 한다 — 재승격이 같은 master 로 돌아와
+        # master_id·image_url NULL 조건은 통과하고 세대 조건만 막는지 본다.
+        rows = _seed_upload([("업티G", [U1, U2])])
+        r1 = rows[U1]
+
+        def after(n, m, res):
+            with connect_test(source_dsn()) as c, c.cursor() as cur:
+                cur.execute("select promoted_master_id, promoted_at from collected_products where id=%s", (r1,))
+                setup["before"] = cur.fetchone()
+                cur.execute("select public.demote_collected_product(%s)", (r1,))
+                promote.run_promotion(cur, ids=[str(r1)], stats=Counter())
+                cur.execute("select promoted_master_id, promoted_at, stage from collected_products where id=%s", (r1,))
+                setup["after"] = cur.fetchone()
+                c.commit()
+        target = _HookTarget(after=after)
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "u1.jpg")
+            with open(fp, "wb") as f:
+                f.write(data)
+            up = _FakeUploader()
+            with connect_test(source_dsn()) as src:
+                stats = upload_prod.run_upload(src, target, ids=[r1, rows[U2]],
+                                               manifest={U1: {"barcode": U1, "local_path": fp}}, uploader=up)
+        b, a = setup.get("before"), setup.get("after")
+        check("inflight-img: 준비 — 같은 master·새 세대로 재승격",
+              b is not None and a is not None and b[0] == a[0] and b[1] != a[1] and a[2] == "promoted", str(setup))
+        check("inflight-img: 운영은 inserted·이미지 업로드 1회",
+              stats.get("barcode_inserted") == 2 and len(up.calls) == 1, f"{dict(stats)} {len(up.calls)}")
+        check("inflight-img: LOCAL image_url 그대로(NULL)", _local_image(U1) is None, str(_local_image(U1)))
+        check("inflight-img: stale_writeback 1", stats.get("stale_writeback") == 1, str(dict(stats)))
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
+def _rpc_rolled_back(master, payload):
+    """대상 DB 에서 실제 RPC 를 트랜잭션 안에서 부르고 롤백한다 — 대상 DB 는 그대로."""
+    with connect_test(target_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        res = _call(cur, master, payload)
+        conn.rollback()
+    return res
+
+
+def test_dryrun_matches_rpc():
+    """같은 대상 상태에서 classify_dryrun 과 실제 RPC(롤백) 의 master·바코드별 결과가 같다."""
+    cases = ["unverified", "needs_review", "verified", "renamed", "conflict", "none"]
+    for case in cases:
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티D", [U1])])
+            target = _HookTarget()
+            with connect_test(source_dsn()) as src:
+                masters, _, _ = fetch_promoted(src, ids=list(rows.values()))
+                (_, vals), = masters.items()
+            payload = [{"barcode": b, "size": "10g", "image_url": None, "image_source_url": None}
+                       for b in (U1, U2, U3)]
+            other = dict(vals, name="업티남", ingredients_raw="upt99-다른원재료", ingredients_tokens=["다른"])
+            if case in ("unverified", "needs_review", "verified"):
+                target.upload(vals, payload[:1])
+                target.upload(other, payload[2:])
+                if case != "unverified":
+                    with target.conn.cursor() as cur:
+                        cur.execute("update product_masters set verified_status=%s where name=%s and brand=%s",
+                                    (case, vals["name"], UP_BRAND))
+                    target.conn.commit()
+            elif case == "renamed":
+                target.upload(dict(vals, name="업티D운영이름"), payload[:1])
+            elif case == "conflict":
+                target.upload(other, payload)
+            else:
+                target.upload(other, payload[2:])
+            with target.conn.cursor() as cur:
+                cur.execute("select count(*) from product_masters where brand=%s", (UP_BRAND,))
+                before = cur.fetchone()[0]
+            target.conn.rollback()
+            dry = classify_dryrun(target, vals, payload)
+            real = _rpc_rolled_back(vals, payload)
+            check(f"dry-run==RPC({case}): master 결과", dry["master_status"] == real["master_status"],
+                  f"{dry['master_status']} / {real['master_status']}")
+            if real["master_status"] != "inserted":
+                check(f"dry-run==RPC({case}): master_id", str(dry["master_id"]) == str(real["master_id"]),
+                      f"{dry['master_id']} / {real['master_id']}")
+            key = lambda r: sorted((b["barcode"], b["status"]) for b in r["barcodes"])
+            check(f"dry-run==RPC({case}): 바코드별 결과", key(dry) == key(real), f"{key(dry)} / {key(real)}")
+            with connect_test(target_dsn()) as c, c.cursor() as cur:
+                cur.execute("select count(*) from product_masters where brand=%s", (UP_BRAND,))
+                check(f"dry-run==RPC({case}): 대상 DB 변화 없음", cur.fetchone()[0] == before)
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
+def test_dryrun_run_upload_writes_nothing():
+    """ids 범위 dry-run: 영수증 0행, prod_master_id 불변, 대상 DB 쓰기 없음."""
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티W1", [U1]), ("업티W2", [U2])])
+        target = _HookTarget()
+        stats = _run(target, ids=list(rows.values()), dry_run=True)
+        check("dry-run 쓰기없음: master 2건 분류", stats.get("master_inserted") == 2, str(dict(stats)))
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("""select count(*) from upload_receipts where collected_id = any(%s)""",
+                        (list(rows.values()),))
+            check("dry-run 쓰기없음: 영수증 0행", cur.fetchone()[0] == 0)
+            cur.execute("select count(*) from collected_products where id = any(%s) and prod_master_id is not null",
+                        (list(rows.values()),))
+            check("dry-run 쓰기없음: prod_master_id 불변", cur.fetchone()[0] == 0)
+        with connect_test(target_dsn()) as c, c.cursor() as cur:
+            cur.execute("select count(*) from product_masters where brand=%s", (UP_BRAND,))
+            m = cur.fetchone()[0]
+            cur.execute("select count(*) from product_barcodes where barcode = any(%s)", (ALL_U,))
+            check("dry-run 쓰기없음: 대상 DB master·barcode 0", m == 0 and cur.fetchone()[0] == 0)
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
 
 
 def main():
@@ -448,8 +1668,23 @@ def main():
               test_rpc_same_ingredients_different_name, test_rpc_renamed_held,
               test_rpc_locks_owner_master, test_rpc_serializes_same_ingredients_uploads,
               test_rpc_cross_upload_no_deadlock,
+              test_rpc_unverified_existing_immutable, test_rpc_review_held,
+              test_rpc_held_returns_existing_links, test_rpc_execute_revoked,
+              test_rpc_locks_same_key_master_appearing_late,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
-              test_writeback_row_scoped, test_dryrun_classify]:
+              test_writeback_row_scoped, test_dryrun_classify,
+              test_fetch_scope_default, test_fetch_scope_ids, test_fetch_scope_all,
+              test_fetch_scope_ids_empty, test_cli_ids_all_exclusive, test_cli_ids_empty,
+              test_receipt_rows_mapping, test_writeback_generation_and_barcode_conditions,
+              test_per_master_commit_and_rollback, test_first_master_committed_before_next,
+              test_resume_after_remote_commit, test_redemote_repromote_regeneration,
+              test_inflight_regeneration_not_filled, test_legacy_null_promoted_at,
+              test_image_object_path, test_storage_already_exists, test_enrich_images_hash_path,
+              test_upload_bytes_http_request, test_image_writeback_only_inserted, test_held_keeps_prod_image,
+              test_deploy_order_no_receipts_table, test_deploy_order_rpc_not_0021,
+              test_deploy_order_rpc_version, test_pg_target_rpc_version, test_rest_target_rpc_version,
+              test_image_writeback_inflight_regeneration,
+              test_dryrun_matches_rpc, test_dryrun_run_upload_writes_nothing]:
         try:
             t()
         except Exception as e:  # noqa

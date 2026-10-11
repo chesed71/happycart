@@ -607,6 +607,22 @@ def test_flagged_merged_child_holds_group():
         conn.rollback()
 
 
+def test_promote_clears_prod_master_id():
+    """승격하면 옛 prod_master_id(운영 연결)가 비워진다 — 새 승격 내용은 다시 업로드해야 한다."""
+    from collections import Counter
+    from promote import run_promotion
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cid = _promotable_parent(cur, SYN_BC_1, name="N-clear-prodmaster")
+        cur.execute("update collected_products set prod_master_id = gen_random_uuid() where id=%s", (cid,))
+        run_promotion(cur, ids=[str(cid)], dry_run=False, stats=Counter())
+        cur.execute("select stage, prod_master_id from collected_products where id=%s", (cid,))
+        stage, pm = cur.fetchone()
+        check("승격됨", stage == "promoted", f"got {stage}")
+        check("prod_master_id 가 NULL", pm is None, f"got {pm}")
+        conn.rollback()
+
+
 def test_closed_merged_child_holds_group():
     """머지 자식이 종료 태그(missing_barcode)면 부모까지 그룹째 보류된다.
 
@@ -1317,7 +1333,7 @@ def main():
               test_rollback_preserves_merged_child, test_no_clobber,
               test_flagged_not_candidate, test_closed_parent_counted_as_held,
               test_deleted_not_candidate,
-              test_flagged_merged_child_holds_group, test_closed_merged_child_holds_group,
+              test_flagged_merged_child_holds_group, test_promote_clears_prod_master_id, test_closed_merged_child_holds_group,
               test_master_source_is_collected_source,
               test_merged_child_lock_blocks_tag_rpc,
               test_held_flagged_counted,
