@@ -421,16 +421,84 @@ def test_rpc_review_held():
 
 
 def test_rpc_execute_revoked():
-    """0021 실행 권한: anon·authenticated 는 실행 불가, service_role 만 실행(0018 과 같은 회수)."""
-    fn = "public.upload_promoted_product(jsonb, jsonb)"
+    """0021 실행 권한: anon·authenticated 는 실행 불가, service_role 만 실행(0018 과 같은 회수). 버전 함수도 같다."""
     for dsn_fn in (source_dsn, target_dsn):
         with connect_test(dsn_fn()) as c, c.cursor() as cur:
             db = c.execute("select current_database()").fetchone()[0]
-            for role, want in (("anon", False), ("authenticated", False), ("service_role", True)):
-                cur.execute("select has_function_privilege(%s, %s, 'execute')", (role, fn))
-                got = cur.fetchone()[0]
-                check(f"0021 권한({db}): {role} execute={want}", got is want, str(got))
+            for fn in ("public.upload_promoted_product(jsonb, jsonb)", "public.upload_promoted_product_version()"):
+                short = fn.split("(")[0].split(".")[1]
+                for role, want in (("anon", False), ("authenticated", False), ("service_role", True)):
+                    cur.execute("select has_function_privilege(%s, %s, 'execute')", (role, fn))
+                    got = cur.fetchone()[0]
+                    check(f"0021 권한({db}) {short}: {role} execute={want}", got is want, str(got))
             c.rollback()
+
+
+def test_rpc_locks_same_key_master_appearing_late():
+    """첫 잠금 조회 뒤에 생긴 같은 master_key master 도 RPC 가 잠그고 읽는다(0021 for update).
+
+    연결2 가 입력 바코드 소유 master(다른 원재료) 를 잡아 RPC(연결1) 를 첫 잠금 조회에서 멈춘 사이,
+    연결3 이 같은 master_key 의 unverified master 를 만들고 커밋한 뒤 그 행을 for update 로 잡는다. 연결2 를 풀면
+    RPC 는 첫 조회 스냅숏에 없던 그 master 를 같은 키 조회에서 잠그려다 연결3 을 기다려야 하고, 연결3 이
+    needs_review 로 바꿔 커밋하면 바뀐 상태를 읽어 review_held 가 된다. 잠그지 않으면 옛 unverified 로 읽어
+    existing 이 된다."""
+    import threading
+    import time
+    brand = "UPLOADTEST_LATE"
+    m = _master(brand=brand, ing="i-late")
+    out = {}
+
+    def blocked_by(pid, blocker, timeout=10.0):
+        deadline = time.time() + timeout
+        with connect_test(source_dsn(), autocommit=True) as c, c.cursor() as cur:
+            while time.time() < deadline:
+                cur.execute("select %s = any(pg_blocking_pids(%s))", (blocker, pid))
+                if cur.fetchone()[0]:
+                    return True
+                time.sleep(0.05)
+        return False
+    try:
+        with connect_test(source_dsn()) as s0, s0.cursor() as cur:
+            cur.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,'다른','i-late-other','okay','v1',now(),'t',now(),'unverified') returning id""", (brand,))
+            other = cur.fetchone()[0]
+            cur.execute("insert into product_barcodes(barcode,master_id,size) values (%s,%s,'1')", (B1, other))
+        with connect_test(source_dsn()) as c1, connect_test(source_dsn()) as c2, connect_test(source_dsn()) as c3:
+            k2, k3 = c2.cursor(), c3.cursor()
+            k2.execute("select 1 from product_masters where id=%s for update", (other,))
+
+            def run1():
+                with c1.cursor() as k1:
+                    out["r"] = _call(k1, m, [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None}])
+                c1.commit()
+            t = threading.Thread(target=run1)
+            t.start()
+            check("late-key: RPC 가 첫 잠금 조회에서 연결2 대기", blocked_by(c1.info.backend_pid, c2.info.backend_pid))
+            k3.execute("""insert into product_masters
+                (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at,verified_status)
+                values (%s,%s,%s,'okay','v1',now(),'t',now(),'unverified') returning id""",
+                       (brand, m["name"], m["ingredients_raw"]))
+            late = k3.fetchone()[0]
+            c3.commit()
+            k3.execute("select 1 from product_masters where id=%s for update", (late,))
+            c2.rollback()
+            check("late-key: RPC 가 늦게 생긴 같은 키 master 에서 연결3 대기",
+                  blocked_by(c1.info.backend_pid, c3.info.backend_pid))
+            k3.execute("update product_masters set verified_status='needs_review' where id=%s", (late,))
+            c3.commit()
+            t.join(timeout=30)
+            r = out.get("r") or {}
+            check("late-key: 바뀐 상태를 읽어 review_held", r.get("master_status") == "review_held"
+                  and str(r.get("master_id")) == str(late), str(r))
+            with c3.cursor() as k:
+                k.execute("select master_id from product_barcodes where barcode=%s", (B1,))
+                check("late-key: B1 은 원래 master 그대로", str(k.fetchone()[0]) == str(other))
+                c3.rollback()
+    finally:
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("delete from product_barcodes where barcode = any(%s)", ([B1, B2],))
+            cur.execute("delete from product_masters where brand=%s", (brand,))
 
 
 def test_rpc_held_returns_existing_links():
@@ -1319,8 +1387,11 @@ def test_held_keeps_prod_image():
 class _FakeTarget:
     """RPC 를 부르지 않고 정해진 결과를 돌려주는 대상. calls 에 호출 master 이름을 남긴다."""
 
-    def __init__(self, status):
-        self.status, self.calls = status, []
+    def __init__(self, status, version=21):
+        self.status, self.version, self.calls = status, version, []
+
+    def rpc_version(self):
+        return self.version
 
     def upload(self, master, barcodes):
         self.calls.append(master["name"])
@@ -1371,6 +1442,136 @@ def test_deploy_order_rpc_not_0021():
             pm, allr, _ = _row_state(rid)
             check(f"배포순서(0020) {bc[-2:]}: 영수증·prod_master_id 없음", pm is None and allr == [], f"{pm} {allr}")
     finally:
+        _cleanup_upload()
+
+
+def test_deploy_order_rpc_version():
+    """운영 버전 함수가 없거나(None) 21 이 아니면 이미지 업로드·RPC 0회, 영수증 0건으로 SystemExit. 21 이면 통과."""
+    data = b"\xff\xd8version-image"
+    for version in (None, 20, 21):
+        _cleanup_upload()
+        try:
+            rows = _seed_upload([("업티V1", [U1]), ("업티V2", [U2])])
+            target = _FakeTarget("inserted", version=version)
+            with tempfile.TemporaryDirectory() as d:
+                fp = os.path.join(d, "u1.jpg")
+                with open(fp, "wb") as f:
+                    f.write(data)
+                up = _FakeUploader()
+                msg = None
+                try:
+                    with connect_test(source_dsn()) as src:
+                        upload_prod.run_upload(src, target, ids=list(rows.values()),
+                                               manifest={U1: {"barcode": U1, "local_path": fp}}, uploader=up)
+                except SystemExit as ex:
+                    msg = str(ex)
+            receipts = sum(len(_row_state(rid)[1]) for rid in rows.values())
+            if version == 21:
+                check("버전(21): 통과·RPC 2회·업로드 1회", msg is None and len(target.calls) == 2 and len(up.calls) == 1,
+                      f"{msg} {target.calls} {len(up.calls)}")
+            else:
+                check(f"버전({version}): SystemExit", msg is not None and "0021" in msg, str(msg))
+                check(f"버전({version}): RPC 0회·이미지 업로드 0회", target.calls == [] and up.calls == [],
+                      f"{target.calls} {len(up.calls)}")
+                check(f"버전({version}): 영수증 0건", receipts == 0, str(receipts))
+        finally:
+            _cleanup_upload()
+
+
+def test_pg_target_rpc_version():
+    """PgTarget 실제 대상 DB: version()=21, 함수가 없으면 None(트랜잭션 안에서 지운 뒤 rollback 으로 복원)."""
+    target = _HookTarget()
+    try:
+        check("PgTarget 버전 21", target.rpc_version() == 21)
+        with target.conn.cursor() as cur:
+            cur.execute("drop function public.upload_promoted_product_version()")
+        check("PgTarget 버전 함수 없음 → None", target.rpc_version() is None)
+        check("PgTarget 버전 확인 뒤 연결 idle",
+              target.conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE)
+        check("PgTarget 버전 함수 복원(rollback)", target.rpc_version() == 21)
+    finally:
+        target.conn.close()
+
+
+def test_rest_target_rpc_version():
+    """RestTarget: 200 → 값, 404(PGRST202) → None, 그 밖 오류는 예외."""
+    import io
+    import urllib.error
+    orig = upload_prod.urllib.request.urlopen
+    env = {k: os.environ.get(k) for k in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")}
+    seen = []
+
+    def make(status, body):
+        def fake(req, *a, **k):
+            seen.append(req.full_url)
+            if status == 200:
+                return io.BytesIO(body.encode())
+            raise urllib.error.HTTPError(req.full_url, status, "x", {}, io.BytesIO(body.encode()))
+        return fake
+    try:
+        os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "https://sb.test", "k"
+        t = upload_prod.RestTarget()
+        upload_prod.urllib.request.urlopen = make(200, "21")
+        check("Rest 버전 200 → 21", t.rpc_version() == 21)
+        check("Rest 버전 경로", seen[-1] == "https://sb.test/rest/v1/rpc/upload_promoted_product_version", seen[-1])
+        upload_prod.urllib.request.urlopen = make(404, '{"code":"PGRST202","message":"Could not find the function"}')
+        check("Rest 버전 404 → None", t.rpc_version() is None)
+        upload_prod.urllib.request.urlopen = make(500, "boom")
+        try:
+            t.rpc_version()
+            raised = False
+        except RuntimeError:
+            raised = True
+        check("Rest 버전 500 → 예외", raised)
+    finally:
+        upload_prod.urllib.request.urlopen = orig
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_image_writeback_inflight_regeneration():
+    """RPC 진행 중 그 행이 같은 바코드로 취소·재승격되면 옛 응답의 이미지 URL 을 LOCAL 에 쓰지 않는다."""
+    from collections import Counter
+    data = b"\xff\xd8inflight-image"
+    _cleanup_upload()
+    target, setup = None, {}
+    try:
+        # 형제 행(U2)을 둬 취소 뒤에도 LOCAL master 가 남게 한다 — 재승격이 같은 master 로 돌아와
+        # master_id·image_url NULL 조건은 통과하고 세대 조건만 막는지 본다.
+        rows = _seed_upload([("업티G", [U1, U2])])
+        r1 = rows[U1]
+
+        def after(n, m, res):
+            with connect_test(source_dsn()) as c, c.cursor() as cur:
+                cur.execute("select promoted_master_id, promoted_at from collected_products where id=%s", (r1,))
+                setup["before"] = cur.fetchone()
+                cur.execute("select public.demote_collected_product(%s)", (r1,))
+                promote.run_promotion(cur, ids=[str(r1)], stats=Counter())
+                cur.execute("select promoted_master_id, promoted_at, stage from collected_products where id=%s", (r1,))
+                setup["after"] = cur.fetchone()
+                c.commit()
+        target = _HookTarget(after=after)
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "u1.jpg")
+            with open(fp, "wb") as f:
+                f.write(data)
+            up = _FakeUploader()
+            with connect_test(source_dsn()) as src:
+                stats = upload_prod.run_upload(src, target, ids=[r1, rows[U2]],
+                                               manifest={U1: {"barcode": U1, "local_path": fp}}, uploader=up)
+        b, a = setup.get("before"), setup.get("after")
+        check("inflight-img: 준비 — 같은 master·새 세대로 재승격",
+              b is not None and a is not None and b[0] == a[0] and b[1] != a[1] and a[2] == "promoted", str(setup))
+        check("inflight-img: 운영은 inserted·이미지 업로드 1회",
+              stats.get("barcode_inserted") == 2 and len(up.calls) == 1, f"{dict(stats)} {len(up.calls)}")
+        check("inflight-img: LOCAL image_url 그대로(NULL)", _local_image(U1) is None, str(_local_image(U1)))
+        check("inflight-img: stale_writeback 1", stats.get("stale_writeback") == 1, str(dict(stats)))
+    finally:
+        if target:
+            target.conn.close()
         _cleanup_upload()
 
 
@@ -1469,6 +1670,7 @@ def main():
               test_rpc_cross_upload_no_deadlock,
               test_rpc_unverified_existing_immutable, test_rpc_review_held,
               test_rpc_held_returns_existing_links, test_rpc_execute_revoked,
+              test_rpc_locks_same_key_master_appearing_late,
               test_no_source_phrase_mapping, test_lottemartzetta_image_lookup,
               test_writeback_row_scoped, test_dryrun_classify,
               test_fetch_scope_default, test_fetch_scope_ids, test_fetch_scope_all,
@@ -1480,6 +1682,8 @@ def main():
               test_image_object_path, test_storage_already_exists, test_enrich_images_hash_path,
               test_upload_bytes_http_request, test_image_writeback_only_inserted, test_held_keeps_prod_image,
               test_deploy_order_no_receipts_table, test_deploy_order_rpc_not_0021,
+              test_deploy_order_rpc_version, test_pg_target_rpc_version, test_rest_target_rpc_version,
+              test_image_writeback_inflight_regeneration,
               test_dryrun_matches_rpc, test_dryrun_run_upload_writes_nothing]:
         try:
             t()

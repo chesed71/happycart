@@ -21,12 +21,14 @@
 이미지: image_url 이 비어있는 승격 바코드는 prepare_images.py 가 정리한 JPEG(manifest 의
 local_path)를 운영 Storage(product-images)의 products/<barcode>-<업로드 바이트 SHA-256 앞 16자>.jpg
 경로에 덮어쓰기 없이(x-upsert 없음) 올리고 그 공개 URL 을 image_url 로 채워 RPC payload 에 실어
-보낸다. 운영이 그 바코드를 실제로 새로 받은(바코드 결과 inserted) 경우에만 로컬
+보낸다. 운영이 그 바코드를 실제로 새로 받은(바코드 결과 inserted) 경우, 로컬 바코드가 여전히 그
+master 소속이고 image_url 이 비어 있으며 그 승격 행이 읽은 세대 그대로일 때만 로컬
 product_barcodes.image_url 에 되쓴다. (Storage 업로드는 SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 필요 — 없으면 image 단계만 건너뛴다.)
 
 배포 순서: ① 운영 Supabase 에 0021 마이그레이션 → ② LOCAL 에 pipeline/sql/upload_receipts.sql DDL →
-③ 이 코드. 실행 시 LOCAL 에 upload_receipts 가 없으면 RPC 를 하나도 부르지 않고 멈추고, 운영 RPC 가
+③ 이 코드. 실행 시(dry-run 제외) 이미지 업로드·RPC 호출 전에 LOCAL 에 upload_receipts 가 있는지, 운영
+upload_promoted_product_version() 이 21 인지 확인하고 아니면 아무것도 쓰지 않고 멈춘다. 이중 방어로 RPC 가
 0021 밖의 master 결과(예: 0020 의 updated)를 돌려주면 그 master 의 LOCAL 기록 전에 멈춘다.
 
 백엔드 2종 (둘 다 같은 RPC 호출):
@@ -189,6 +191,15 @@ class RestTarget:
         return [(r["master_id"], r["product_masters"]["ingredients_hash"],
                  r["product_masters"]["master_key"]) for r in rows or []]
 
+    def rpc_version(self):
+        """운영 upload_promoted_product_version() 값. 함수가 없으면(404·PGRST202) None — 0020 이하."""
+        try:
+            return self._req("POST", "/rpc/upload_promoted_product_version", {})
+        except RuntimeError as ex:
+            if " → 404 " in str(ex) or "PGRST202" in str(ex):
+                return None
+            raise
+
     def upload(self, master, barcodes):
         return self._req("POST", "/rpc/upload_promoted_product",
                          {"p_master": master, "p_barcodes": barcodes})
@@ -219,6 +230,17 @@ class PgTarget:
                            from product_barcodes b join product_masters m on m.id = b.master_id
                            where b.barcode = any(%s)""", (list(barcodes),))
             return cur.fetchall()
+
+    def rpc_version(self):
+        """운영 upload_promoted_product_version() 값. 함수가 없으면 None — 0020 이하. 읽기만 하고 rollback."""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("select public.upload_promoted_product_version()")
+                return cur.fetchone()[0]
+        except psycopg.errors.UndefinedFunction:
+            return None
+        finally:
+            self.conn.rollback()
 
     def upload(self, master, barcodes):
         # 실패하면 rollback 해 연결을 실패 트랜잭션 상태로 남기지 않는다 — 남기면 뒤 master 가 모두 실패한다.
@@ -340,6 +362,7 @@ def writeback_attachments(cur, attach_rows):
 
 
 ATTACHED_RESULTS = ("inserted", "existing", "exists")
+RPC_VERSION = 21  # 운영 upload_promoted_product_version() 이 돌려줘야 하는 값(0021)
 # RPC 0021 이 돌려주는 master 결과 전부. 이 밖(예: 0020 의 updated)이면 운영 RPC 가 0021 이 아니다.
 RPC_MASTER_STATUSES = ("inserted", "existing", "review_held", "verified_held", "renamed_held", "empty_held")
 
@@ -440,6 +463,11 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
         uploader = StorageUploader()
     if not dry_run and not local_has_upload_receipts(src):
         raise SystemExit("LOCAL에 upload_receipts가 없습니다 — pipeline/sql/upload_receipts.sql 먼저 적용")
+    if not dry_run:
+        version = target.rpc_version()
+        if version != RPC_VERSION:
+            raise SystemExit(f"운영 RPC가 0021이 아닙니다 — 0021 먼저 적용"
+                             f" (upload_promoted_product_version={version!r})")
 
     masters, bc_by_master, skipped = fetch_promoted(src, ids=ids, all_=all_)
     stats["skipped_ids"] = len(skipped)
@@ -505,12 +533,20 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
             written = writeback_attachments(cur, attach)
             # Storage 업로드 성공분의 image_url 을 로컬에도 반영 (재실행 시 재업로드 회피).
             # 운영이 그 URL 을 실제로 받은 경우(바코드 결과 inserted)만 — 보류·exists 는 운영 값이 따로 있다.
+            # 로컬 바코드가 아직 이 master 소속이고 비어 있으며 그 승격 행이 읽은 세대 그대로일 때만 —
+            # 업로드 도중 재승격·바코드 재사용이 있으면 옛 응답의 URL 로 채우지 않는다.
             took_url = {b["barcode"] for b in res["barcodes"] if b["status"] == "inserted"}
+            read_gen = {e["barcode"]: e["promoted_at"] for e in entries}
             for barcode, image_url in image_writeback:
                 if barcode not in took_url:
                     continue
-                cur.execute("update product_barcodes set image_url=%s where barcode=%s",
-                            (image_url, barcode))
+                cur.execute("""update product_barcodes b set image_url=%s
+                               where b.barcode=%s and b.master_id=%s and b.image_url is null
+                                 and exists (select 1 from collected_products c
+                                             where c.barcode=b.barcode and c.promoted_master_id=%s
+                                               and c.stage='promoted'
+                                               and c.promoted_at is not distinct from %s)""",
+                            (image_url, barcode, local_id, local_id, read_gen[barcode]))
         src.commit()
         stats["attached_written"] += written
         if written < len(attach):

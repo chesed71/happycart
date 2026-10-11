@@ -100,6 +100,11 @@ if [[ "$(docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -tA -c \
   echo "upload_promoted_product가 0021 버전이 아닙니다(review_held 없음)." >&2
   exit 1
 fi
+if [[ "$(docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -tA -c \
+      "select public.upload_promoted_product_version()")" != "21" ]]; then
+  echo "upload_promoted_product_version()이 없거나 21이 아닙니다." >&2
+  exit 1
+fi
 
 echo "==> summary"
 docker exec "$CONTAINER" psql -U "$PG_USER" -d "$DB" -c \

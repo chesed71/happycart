@@ -22,6 +22,9 @@
 -- 코드도 그 연결을 그대로 기록한다. 다만 옛 코드는 전부 다시 보내고 고정 이미지 경로를 덮어쓰며 영수증을
 -- 남기지 않으므로, 배포 사이에는 업로드를 돌리지 않는다.
 --
+-- upload_promoted_product_version(): 읽기 전용, 21 을 돌려준다. upload_prod.py 가 이미지 업로드·RPC 호출 전에
+-- 불러 운영 RPC 가 0021 인지 확인한다(없으면 0020 이하로 보고 아무것도 쓰지 않고 멈춘다).
+--
 -- create or replace 라 다시 적용해도 결과가 같다.
 
 create or replace function public.upload_promoted_product(p_master jsonb, p_barcodes jsonb)
@@ -76,9 +79,11 @@ begin
     v_id := v_renamed;
     v_status := 'renamed_held';
   else
-    -- 같은 master_key 의 기존 master(위에서 이미 잠금).
+    -- 같은 master_key 의 기존 master. 위 잠금 조회 뒤에 다른 경로(이름 변경 등)로 그 키가 생겼을 수 있어
+    -- 여기서도 잠그고 읽는다 — 그사이 verified·needs_review 로 바뀐 걸 옛 상태로 보고 바코드를 붙이지 않게.
     select id, verified_status into v_id, v_vstatus
-    from public.product_masters where master_key = v_key;
+    from public.product_masters where master_key = v_key
+    for update;
 
     if v_id is null then
       -- 없을 때만 새로 만든다. advisory lock 밖의 경로(데스크 등)가 그사이 같은 master_key 를 커밋했으면
@@ -168,3 +173,15 @@ revoke all on function public.upload_promoted_product(jsonb, jsonb) from public;
 revoke all on function public.upload_promoted_product(jsonb, jsonb) from anon;
 revoke all on function public.upload_promoted_product(jsonb, jsonb) from authenticated;
 grant execute on function public.upload_promoted_product(jsonb, jsonb) to service_role;
+
+create or replace function public.upload_promoted_product_version()
+returns integer
+language sql
+immutable
+set search_path = ''
+as $$ select 21 $$;
+
+revoke all on function public.upload_promoted_product_version() from public;
+revoke all on function public.upload_promoted_product_version() from anon;
+revoke all on function public.upload_promoted_product_version() from authenticated;
+grant execute on function public.upload_promoted_product_version() to service_role;
