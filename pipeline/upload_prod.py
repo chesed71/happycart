@@ -155,8 +155,8 @@ class RestTarget:
         h = master_key(vals["brand"], vals["name"], vals["ingredients_raw"])
         rows = self._req("GET", f"/product_masters?master_key=eq.{h}&select=id,verified_status")
         if not rows:
-            return None, False
-        return rows[0]["id"], rows[0]["verified_status"] == "verified"
+            return None, None
+        return rows[0]["id"], rows[0]["verified_status"]
 
     def barcode_owner(self, barcode):
         rows = self._req("GET", f"/product_barcodes?barcode=eq.{barcode}&select=master_id")
@@ -186,7 +186,7 @@ class PgTarget:
                         "where master_key = md5(%s||'|'||%s||'|'||%s)",
                         (vals["brand"], vals["name"], vals["ingredients_raw"]))
             r = cur.fetchone()
-            return (None, False) if not r else (r[0], r[1] == "verified")
+            return (None, None) if not r else (r[0], r[1])
 
     def barcode_owner(self, barcode):
         with self.conn.cursor() as cur:
@@ -361,12 +361,21 @@ def classify_dryrun(target, vals, barcodes):
     """쓰기 없이 master/barcode가 어떻게 처리될지 분류 (운영 읽기만). RPC와 동일 분류."""
     owners = target.barcode_owner_masters([bc["barcode"] for bc in barcodes])
     renamed = renamed_owner_id(owners, vals)
+    existing_id, vstatus = target.plan_master(vals)
     if renamed is not None:
-        return {"master_id": renamed, "master_status": "renamed_held", "barcodes": []}
-    existing_id, verified = target.plan_master(vals)
-    if verified:
-        return {"master_id": existing_id, "master_status": "verified_held", "barcodes": []}
-    m_status = "updated" if existing_id is not None else "inserted"
+        held_id, held_status = renamed, "renamed_held"
+    elif vstatus == "verified":
+        held_id, held_status = existing_id, "verified_held"
+    elif vstatus == "needs_review":
+        held_id, held_status = existing_id, "review_held"
+    else:
+        held_id = held_status = None
+    if held_status:
+        # 보류: 새 연결 없이, 입력 바코드 중 이미 그 master 소속인 것만 exists (RPC 0021 과 동일)
+        kept = [{"barcode": bc["barcode"], "status": "exists"} for bc in barcodes
+                if str(target.barcode_owner(bc["barcode"])) == str(held_id)]
+        return {"master_id": held_id, "master_status": held_status, "barcodes": kept}
+    m_status = "existing" if existing_id is not None else "inserted"
     bc_out, attached = [], 0
     attached_here = set()  # 이 호출에서 이미 붙인 바코드 — RPC 는 같은 바코드 재입력을 exists 로 본다
     for bc in barcodes:

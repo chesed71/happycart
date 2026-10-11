@@ -435,8 +435,8 @@ def test_rpc_held_returns_existing_links():
 
 class _StubTarget:
     """dry-run 분류 단위 테스트용 — DB 없이 plan/owner를 흉내낸다."""
-    def __init__(self, existing_id, verified, owners, owner_masters=()):
-        self._e, self._v, self._owners = existing_id, verified, owners
+    def __init__(self, existing_id, vstatus, owners, owner_masters=()):
+        self._e, self._v, self._owners = existing_id, vstatus, owners
         self._owner_masters = list(owner_masters)
     def plan_master(self, vals):
         return self._e, self._v
@@ -451,38 +451,48 @@ def test_dryrun_classify():
     bcs = [{"barcode": B1, "size": "1", "image_url": None, "image_source_url": None},
            {"barcode": B2, "size": "1", "image_url": None, "image_source_url": None}]
     # 신규 master + B1 미존재, B2는 다른 master 소속 → inserted / inserted+conflict
-    r = classify_dryrun(_StubTarget(None, False, {B2: "other-master"}), vals, bcs)
+    r = classify_dryrun(_StubTarget(None, None, {B2: "other-master"}), vals, bcs)
     check("dry-run 신규 master=inserted", r["master_status"] == "inserted")
     bcmap = {b["barcode"]: b["status"] for b in r["barcodes"]}
     check("dry-run 신규 barcode=inserted", bcmap[B1] == "inserted")
     check("dry-run 타소속 barcode=conflict", bcmap[B2] == "conflict")
-    # 기존 verified master → held. 계약: barcodes는 빈 배열 (RPC와 동일)
-    r2 = classify_dryrun(_StubTarget("mid", True, {B1: "mid"}), vals, bcs)
+    # 기존 verified master → held. 그 master 소속 바코드만 exists (RPC 0021 과 동일)
+    r2 = classify_dryrun(_StubTarget("mid", "verified", {B1: "mid", B2: "other"}), vals, bcs)
     check("dry-run verified=held", r2["master_status"] == "verified_held")
-    check("dry-run verified: barcodes 빈 배열", r2["barcodes"] == [], r2["barcodes"])
-    # 기존 unverified master, B1이 그 master 소속 → updated, exists
-    r3 = classify_dryrun(_StubTarget("mid", False, {B1: "mid"}), vals, bcs)
-    check("dry-run 기존 unverified=updated", r3["master_status"] == "updated")
+    check("dry-run verified: 소속 바코드만 exists", r2["barcodes"] == [{"barcode": B1, "status": "exists"}],
+          str(r2["barcodes"]))
+    check("dry-run verified: master_id", r2["master_id"] == "mid")
+    # 기존 unverified master, B1이 그 master 소속 → existing(updated 아님), exists / inserted
+    r3 = classify_dryrun(_StubTarget("mid", "unverified", {B1: "mid"}), vals, bcs)
+    check("dry-run 기존 unverified=existing", r3["master_status"] == "existing", r3["master_status"])
     bcmap3 = {b["barcode"]: b["status"] for b in r3["barcodes"]}
     check("dry-run 동일소속 barcode=exists", bcmap3[B1] == "exists")
     check("dry-run 미존재 barcode=inserted", bcmap3[B2] == "inserted")
+    # needs_review → review_held, 그 master 소속 바코드만 exists, 새 연결 없음
+    r3b = classify_dryrun(_StubTarget("mid", "needs_review", {B1: "mid"}), vals, bcs)
+    check("dry-run needs_review=review_held", r3b["master_status"] == "review_held", r3b["master_status"])
+    check("dry-run review_held: 소속 바코드만 exists, 신규 연결 없음",
+          r3b["barcodes"] == [{"barcode": B1, "status": "exists"}] and r3b["master_id"] == "mid",
+          str(r3b["barcodes"]))
     # 신규 master인데 모든 barcode가 타소속 → empty_held
-    r4 = classify_dryrun(_StubTarget(None, False, {B1: "o", B2: "o"}), vals, bcs)
+    r4 = classify_dryrun(_StubTarget(None, None, {B1: "o", B2: "o"}), vals, bcs)
     check("dry-run 전부충돌 신규=empty_held", r4["master_status"] == "empty_held")
     check("dry-run empty_held: master_id 없음", r4["master_id"] is None)
     # 입력 바코드가 '같은 brand+원재료, 다른 이름' master 소속 → renamed_held (RPC 0020 과 동일)
     renamed_owner = ("old-mid", ingredients_hash(vals["brand"], vals["ingredients_raw"]),
                      master_key(vals["brand"], "옛이름", vals["ingredients_raw"]))
-    r5 = classify_dryrun(_StubTarget(None, False, {B1: "old-mid"}, [renamed_owner]), vals, bcs)
+    r5 = classify_dryrun(_StubTarget(None, None, {B1: "old-mid"}, [renamed_owner]), vals, bcs)
     check("dry-run 이름바뀐 같은상품=renamed_held", r5["master_status"] == "renamed_held", r5["master_status"])
-    check("dry-run renamed_held: 바코드 미처리", r5["barcodes"] == [] and r5["master_id"] == "old-mid")
+    check("dry-run renamed_held: 이름 바뀐 master 소속 바코드만 exists",
+          r5["barcodes"] == [{"barcode": B1, "status": "exists"}] and r5["master_id"] == "old-mid",
+          str(r5["barcodes"]))
     # 원재료가 다른 master 소속이면 renamed 아님 → 기존 분류(B1 conflict, B2 inserted)
     other_owner = ("o", ingredients_hash(vals["brand"], "다른원재료"), "x")
-    r6 = classify_dryrun(_StubTarget(None, False, {B1: "o"}, [other_owner]), vals, bcs)
+    r6 = classify_dryrun(_StubTarget(None, None, {B1: "o"}, [other_owner]), vals, bcs)
     check("dry-run 원재료 다른 소유자=renamed 아님", r6["master_status"] == "inserted", r6["master_status"])
     # 같은 바코드가 payload 에 두 번 → RPC 처럼 inserted, exists
     dup = [bcs[0], dict(bcs[0])]
-    r7 = classify_dryrun(_StubTarget(None, False, {}), vals, dup)
+    r7 = classify_dryrun(_StubTarget(None, None, {}), vals, dup)
     check("dry-run 중복 바코드=inserted,exists",
           [b["status"] for b in r7["barcodes"]] == ["inserted", "exists"], str(r7["barcodes"]))
 
@@ -1210,6 +1220,93 @@ def test_held_keeps_prod_image():
             _cleanup_upload()
 
 
+def _rpc_rolled_back(master, payload):
+    """대상 DB 에서 실제 RPC 를 트랜잭션 안에서 부르고 롤백한다 — 대상 DB 는 그대로."""
+    with connect_test(target_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        res = _call(cur, master, payload)
+        conn.rollback()
+    return res
+
+
+def test_dryrun_matches_rpc():
+    """같은 대상 상태에서 classify_dryrun 과 실제 RPC(롤백) 의 master·바코드별 결과가 같다."""
+    cases = ["unverified", "needs_review", "verified", "renamed", "conflict", "none"]
+    for case in cases:
+        _cleanup_upload()
+        target = None
+        try:
+            rows = _seed_upload([("업티D", [U1])])
+            target = _HookTarget()
+            with connect_test(source_dsn()) as src:
+                masters, _, _ = fetch_promoted(src, ids=list(rows.values()))
+                (_, vals), = masters.items()
+            payload = [{"barcode": b, "size": "10g", "image_url": None, "image_source_url": None}
+                       for b in (U1, U2, U3)]
+            other = dict(vals, name="업티남", ingredients_raw="upt99-다른원재료", ingredients_tokens=["다른"])
+            if case in ("unverified", "needs_review", "verified"):
+                target.upload(vals, payload[:1])
+                target.upload(other, payload[2:])
+                if case != "unverified":
+                    with target.conn.cursor() as cur:
+                        cur.execute("update product_masters set verified_status=%s where name=%s and brand=%s",
+                                    (case, vals["name"], UP_BRAND))
+                    target.conn.commit()
+            elif case == "renamed":
+                target.upload(dict(vals, name="업티D운영이름"), payload[:1])
+            elif case == "conflict":
+                target.upload(other, payload)
+            else:
+                target.upload(other, payload[2:])
+            with target.conn.cursor() as cur:
+                cur.execute("select count(*) from product_masters where brand=%s", (UP_BRAND,))
+                before = cur.fetchone()[0]
+            target.conn.rollback()
+            dry = classify_dryrun(target, vals, payload)
+            real = _rpc_rolled_back(vals, payload)
+            check(f"dry-run==RPC({case}): master 결과", dry["master_status"] == real["master_status"],
+                  f"{dry['master_status']} / {real['master_status']}")
+            if real["master_status"] != "inserted":
+                check(f"dry-run==RPC({case}): master_id", str(dry["master_id"]) == str(real["master_id"]),
+                      f"{dry['master_id']} / {real['master_id']}")
+            key = lambda r: sorted((b["barcode"], b["status"]) for b in r["barcodes"])
+            check(f"dry-run==RPC({case}): 바코드별 결과", key(dry) == key(real), f"{key(dry)} / {key(real)}")
+            with connect_test(target_dsn()) as c, c.cursor() as cur:
+                cur.execute("select count(*) from product_masters where brand=%s", (UP_BRAND,))
+                check(f"dry-run==RPC({case}): 대상 DB 변화 없음", cur.fetchone()[0] == before)
+        finally:
+            if target:
+                target.conn.close()
+            _cleanup_upload()
+
+
+def test_dryrun_run_upload_writes_nothing():
+    """ids 범위 dry-run: 영수증 0행, prod_master_id 불변, 대상 DB 쓰기 없음."""
+    _cleanup_upload()
+    target = None
+    try:
+        rows = _seed_upload([("업티W1", [U1]), ("업티W2", [U2])])
+        target = _HookTarget()
+        stats = _run(target, ids=list(rows.values()), dry_run=True)
+        check("dry-run 쓰기없음: master 2건 분류", stats.get("master_inserted") == 2, str(dict(stats)))
+        with connect_test(source_dsn()) as c, c.cursor() as cur:
+            cur.execute("""select count(*) from upload_receipts where collected_id = any(%s)""",
+                        (list(rows.values()),))
+            check("dry-run 쓰기없음: 영수증 0행", cur.fetchone()[0] == 0)
+            cur.execute("select count(*) from collected_products where id = any(%s) and prod_master_id is not null",
+                        (list(rows.values()),))
+            check("dry-run 쓰기없음: prod_master_id 불변", cur.fetchone()[0] == 0)
+        with connect_test(target_dsn()) as c, c.cursor() as cur:
+            cur.execute("select count(*) from product_masters where brand=%s", (UP_BRAND,))
+            m = cur.fetchone()[0]
+            cur.execute("select count(*) from product_barcodes where barcode = any(%s)", (ALL_U,))
+            check("dry-run 쓰기없음: 대상 DB master·barcode 0", m == 0 and cur.fetchone()[0] == 0)
+    finally:
+        if target:
+            target.conn.close()
+        _cleanup_upload()
+
+
 def main():
     for t in [test_rpc_insert_and_idempotent, test_rpc_verified_held,
               test_rpc_barcode_conflict_empty_held, test_rpc_mixed_barcode,
@@ -1227,7 +1324,8 @@ def main():
               test_resume_after_remote_commit, test_redemote_repromote_regeneration,
               test_inflight_regeneration_not_filled, test_legacy_null_promoted_at,
               test_image_object_path, test_storage_already_exists, test_enrich_images_hash_path,
-              test_upload_bytes_http_request, test_held_keeps_prod_image]:
+              test_upload_bytes_http_request, test_held_keeps_prod_image,
+              test_dryrun_matches_rpc, test_dryrun_run_upload_writes_nothing]:
         try:
             t()
         except Exception as e:  # noqa
