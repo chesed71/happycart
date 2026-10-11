@@ -12,9 +12,7 @@ import sys
 
 import psycopg
 
-from common import dsn
-
-REVIEW_DSN = "postgresql://datadesk_review:datadesk_review@127.0.0.1:54322/happycart"
+from testdb import connect_test, review_dsn, source_dsn, target_dsn
 
 results: list[tuple[str, bool, str]] = []
 
@@ -97,7 +95,7 @@ def _merged_child(cur, parent, barcode, *, stage="parsed", review_decision="need
 
 def test_rpc_invariants():
     """RPC: stage=parsed 복원 + 파생 비움 + reviewed_at + confidence 보존/정합."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cid = _fixture(cur, confidence="high")
         cur.execute("select public.review_collected_product(%s,%s,%s,%s,%s,%s)",
@@ -123,7 +121,7 @@ def test_rpc_invariants():
 
 def test_promoted_lock():
     """RPC: promoted 행은 잠금(예외)."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cid = _fixture(cur, stage="promoted")
         try:
@@ -142,7 +140,7 @@ def test_bad_inputs():
         ("decision 거부", "8801037088168", "x", "high", "bogus", "invalid decision"),
     ]
     for label, bc, ing, conf, dec, marker in cases:
-        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
             cur.execute("begin")
             cid = _fixture(cur)
             try:
@@ -156,7 +154,7 @@ def test_bad_inputs():
 
 def test_least_privilege():
     """datadesk_review: 직접 UPDATE/타테이블 거부, RPC만 허용."""
-    with psycopg.connect(REVIEW_DSN) as conn, conn.cursor() as cur:
+    with connect_test(review_dsn()) as conn, conn.cursor() as cur:
         for label, q in [
             ("직접 UPDATE 거부", "update collected_products set stage='promoted'"),
             ("타테이블 SELECT 거부", "select count(*) from product_masters"),
@@ -172,17 +170,17 @@ def test_least_privilege():
 
 def test_for_update_race():
     """FOR UPDATE: 다른 트랜잭션이 행을 잠그면 RPC가 대기(경쟁 차단)."""
-    with psycopg.connect(dsn()) as setup, setup.cursor() as scur:
+    with connect_test(source_dsn()) as setup, setup.cursor() as scur:
         scur.execute("begin")
         cid = _fixture(scur, stage="judged")
         setup.commit()  # 픽스처 커밋 (다른 연결에서 보이도록)
     try:
-        locker = psycopg.connect(dsn())
+        locker = connect_test(source_dsn())
         lcur = locker.cursor()
         lcur.execute("begin")
         lcur.execute("select id from collected_products where id=%s for update", (cid,))  # 행 잠금
         # 두 번째 연결: RPC가 잠긴 행을 기다려야 한다 → statement_timeout 으로 블로킹 확인
-        with psycopg.connect(dsn()) as conn2, conn2.cursor() as c2:
+        with connect_test(source_dsn()) as conn2, conn2.cursor() as c2:
             c2.execute("set statement_timeout = '800ms'")
             try:
                 c2.execute("select public.review_collected_product(%s,%s,%s,%s,%s,%s)",
@@ -193,14 +191,14 @@ def test_for_update_race():
         locker.rollback()
         lcur.close(); locker.close()
     finally:
-        with psycopg.connect(dsn()) as cleanup, cleanup.cursor() as cc:
+        with connect_test(source_dsn()) as cleanup, cleanup.cursor() as cc:
             cc.execute("delete from collected_products where id=%s", (cid,))
             cleanup.commit()
 
 
 def test_rollback_scope():
     """rollback: verified 승격분은 보존, non-verified만 되돌림."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         # 가짜 master 2개 + collected 2개 (verified / non-verified) promoted
         cur.execute("""insert into product_masters
@@ -233,12 +231,12 @@ def test_promote_locks_during_review():
     이전 테스트(test_for_update_race)는 RPC가 기존 잠금 뒤에서 대기함만 봤다.
     여기선 promote.py 와 동일한 후보 SELECT ... FOR UPDATE 가 review 를 막는지 본다.
     """
-    with psycopg.connect(dsn()) as s, s.cursor() as sc:
+    with connect_test(source_dsn()) as s, s.cursor() as sc:
         sc.execute("begin")
         cid = _fixture(sc, stage="judged", review_decision="verified", barcode="8801037088168")
         s.commit()
     try:
-        promoter = psycopg.connect(dsn())
+        promoter = connect_test(source_dsn())
         pc = promoter.cursor()
         pc.execute("begin")
         # promote.py 의 실제 후보 잠금 쿼리를 그대로 실행 (복제 아님 — FOR UPDATE가 빠지면
@@ -247,7 +245,7 @@ def test_promote_locks_during_review():
         pc.execute(CANDIDATE_SELECT)
         locked_ids = {str(r[0]) for r in pc.fetchall()}
         check("promote 후보에 fixture 포함(잠금)", str(cid) in locked_ids)
-        with psycopg.connect(dsn()) as c2conn, c2conn.cursor() as c2:
+        with connect_test(source_dsn()) as c2conn, c2conn.cursor() as c2:
             c2.execute("set statement_timeout='800ms'")
             try:
                 c2.execute("select public.review_collected_product(%s,%s,%s,%s,%s,%s)",
@@ -258,14 +256,14 @@ def test_promote_locks_during_review():
         promoter.rollback()
         pc.close(); promoter.close()
     finally:
-        with psycopg.connect(dsn()) as cl, cl.cursor() as cc:
+        with connect_test(source_dsn()) as cl, cl.cursor() as cc:
             cc.execute("delete from collected_products where id=%s", (cid,))
             cl.commit()
 
 
 def test_rollback_shared_master():
     """rollback 실제 실행: verified/non-verified 가 공유한 master 에서 verified 보존."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
@@ -297,7 +295,7 @@ def test_rollback_shared_master():
 def test_rollback_shared_barcode():
     """rollback: verified·non-verified가 같은 barcode를 가리키는 손상 데이터에서
     verified의 barcode link가 보존되어야 한다 (HIGH 코멘트 케이스)."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
@@ -328,7 +326,7 @@ def test_rollback_divergent_owner():
     """rollback: 같은 barcode를 verified·non-verified가 다른 master로 주장하는(divergent)
     손상 데이터. verified를 진실로 보고, 그 barcode가 verified의 master에 그대로 남고
     link(master_id)도 verified.promoted_master_id와 일치해야 한다."""
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,
@@ -368,7 +366,7 @@ def test_rollback_preserves_merged_child():
     의도된 머지 자식은 stage·바코드 링크가 보존돼야 한다(PR #12 MEDIUM 대응)."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         parent = _promotable_parent(cur, SYN_BC_1)
         child = _merged_child(cur, parent, SYN_BC_2)  # stage=parsed, needs_fix
@@ -402,7 +400,7 @@ def test_flagged_not_candidate():
     조건이 바뀌면 깨지도록. 데이터데스크 readyIds 와 같은 조건이어야 한다.
     """
     from promote import CANDIDATE_SELECT
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cid = _promotable_parent(cur, "8801037088168", name="N-flagged")
         cur.execute(CANDIDATE_SELECT)
         check("태그 없으면 후보에 포함", str(cid) in {str(r[0]) for r in cur.fetchall()})
@@ -436,7 +434,7 @@ def test_deleted_not_candidate():
     목록에서 숨기지만 후보 쿼리가 거르지 않으면 지워진 행이 전체 배치에서 승격된다.
     """
     from promote import CANDIDATE_SELECT
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cid = _promotable_parent(cur, SYN_BC_2, name="N-deleted")
         cur.execute(CANDIDATE_SELECT)
         check("삭제 전엔 후보에 포함", str(cid) in {str(r[0]) for r in cur.fetchall()})
@@ -461,7 +459,7 @@ def test_flagged_merged_child_holds_group():
     """
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-flagchild")
         child = _merged_child(cur, parent, SYN_BC_2)
@@ -502,7 +500,7 @@ def test_closed_merged_child_holds_group():
     """
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-closedchild")
         child = _merged_child(cur, parent, SYN_BC_2)
@@ -545,7 +543,7 @@ def test_master_source_is_collected_source():
     from collections import Counter
     from promote import run_promotion
     for src in ("cp", "kk", "lz"):
-        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
             cur.execute("begin")
             pid = _promotable_parent(cur, SYN_BC_1, name=f"N-src-{src}")
             cur.execute("update collected_products set source=%s where id=%s", (src, pid))
@@ -570,19 +568,19 @@ def test_merged_child_lock_blocks_tag_rpc():
     대기해야 한다 — 실제 상수(MERGED_CHILDREN_LOCK)를 그대로 써서 잠금이 빠지면 깨지게 한다.
     """
     from promote import MERGED_CHILDREN_LOCK
-    with psycopg.connect(dsn()) as s, s.cursor() as sc:
+    with connect_test(source_dsn()) as s, s.cursor() as sc:
         sc.execute("begin")
         parent = _promotable_parent(sc, SYN_BC_1, name="N-lock-parent")
         child = _merged_child(sc, parent, SYN_BC_2)
         s.commit()
     try:
-        promoter = psycopg.connect(dsn())
+        promoter = connect_test(source_dsn())
         pc = promoter.cursor()
         pc.execute("begin")
         pc.execute(MERGED_CHILDREN_LOCK, ([str(parent)],))
         locked = {str(r[0]) for r in pc.fetchall()}
         check("머지 자식이 잠금 대상에 포함", str(child) in locked, f"got {locked}")
-        with psycopg.connect(dsn()) as c2conn, c2conn.cursor() as c2:
+        with connect_test(source_dsn()) as c2conn, c2conn.cursor() as c2:
             c2.execute("set statement_timeout='800ms'")
             try:
                 c2.execute("select public.set_collected_product_review_tag(%s,%s)",
@@ -593,7 +591,7 @@ def test_merged_child_lock_blocks_tag_rpc():
         promoter.rollback()
         pc.close(); promoter.close()
     finally:
-        with psycopg.connect(dsn()) as cl, cl.cursor() as cc:
+        with connect_test(source_dsn()) as cl, cl.cursor() as cc:
             cc.execute("delete from collected_products where id in (%s,%s)", (child, parent))
             cl.commit()
 
@@ -606,7 +604,7 @@ def test_held_flagged_counted():
     """
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cid = _promotable_parent(cur, SYN_BC_1, name="N-held-flagged")
         cur.execute(
@@ -645,7 +643,7 @@ def test_closed_parent_counted_as_held():
     """
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cid = _promotable_parent(cur, SYN_BC_1, name="N-held-closed")
         cur.execute(
@@ -672,7 +670,7 @@ def test_upsert_preserves_desk_raw_keys():
     조용히 풀린다. 파이프라인이 만드는 키는 새 값으로 갱신되어야 한다.
     """
     from common import upsert_parsed
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute(
             """
             insert into collected_products
@@ -763,7 +761,7 @@ def test_merged_child_promotes_with_parent():
     자식의 사람 검수 필드(review_decision)는 건드리지 않는다(머지 관계 근거)."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         # 승격 후보 부모(verified, judged, 모든 게이트 통과)
         parent = _fixture(cur, stage="judged", barcode=SYN_BC_1,
@@ -814,7 +812,7 @@ def test_rejected_merged_child_not_promoted():
     """머지 자식이 stage='rejected'(자격 박탈)면 부모 승격에 딸려가지 않는다."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         parent = _promotable_parent(cur, SYN_BC_1)
         child = _merged_child(cur, parent, SYN_BC_2, stage="rejected")
@@ -830,7 +828,7 @@ def test_merged_child_barcode_conflict_held():
     """자식 바코드가 다른 master 소유면 재링크하지 않고 conflict 보류(health-critical)."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         cur.execute("""insert into product_masters
             (brand,name,ingredients_raw,verdict,rule_version,computed_at,source,source_checked_at)
@@ -853,7 +851,7 @@ def test_same_ingredients_different_name_split():
     """원재료 표기가 같아도 상품명이 다르면 master 를 따로 만든다(0019). 머지 자식은 부모 master 로."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         p1 = _promotable_parent(cur, SYN_BC_1, name="이름하나")
         p2 = _promotable_parent(cur, SYN_BC_2, name="이름다름")  # 같은 brand+ingredients, 다른 name
@@ -877,7 +875,7 @@ def test_numbered_variant_name_kept_separate():
     """숫자가 든 구분자 괄호("(비타민 B12)")는 용량이 아니므로 지우지 않고 master 도 분리한다."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         p1 = _promotable_parent(cur, SYN_BC_1, name="음료 (비타민 B12)")
         p2 = _promotable_parent(cur, SYN_BC_2, name="음료 (비타민 B6)")
@@ -910,7 +908,7 @@ def test_batch_and_single_promotion_agree():
     from promote import run_promotion
     counts = []
     for mode in ("batch", "single"):
-        with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        with connect_test(source_dsn()) as conn, conn.cursor() as cur:
             cur.execute("begin")
             p1 = _promotable_parent(cur, SYN_BC_1, name="하얀 설탕 (1KG)")
             p2 = _promotable_parent(cur, SYN_BC_2, name="하얀설탕 (3KG)")
@@ -930,7 +928,7 @@ def test_size_variant_same_master():
     """끝 용량 괄호만 다른 포장 변형은 master 1개 + 바코드 N개로 승격한다."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         p1 = _promotable_parent(cur, SYN_BC_1, name="하얀설탕 (1KG)")
         p2 = _promotable_parent(cur, SYN_BC_2, name="하얀설탕 (3KG)")
@@ -951,7 +949,7 @@ def test_merged_child_verified_promotes_via_parent_only():
     중복 후보로 처리돼 stage 가 conflict 로 오염되지 않는다(순서 비의존)."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         parent = _promotable_parent(cur, SYN_BC_1)
         child = _merged_child(cur, parent, SYN_BC_2, stage="judged",
@@ -976,7 +974,7 @@ def test_dryrun_counts_merged_child_barcodes():
     실측과 어긋난다. 자식 수를 더해 상한 근사로 맞춘다."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         parent = _promotable_parent(cur, SYN_BC_1)
         _merged_child(cur, parent, SYN_BC_2)  # parsed, needs_fix
@@ -996,7 +994,7 @@ def test_held_counts_scoped_to_ids():
     스코프된 id 집합으로 한정해야 한다."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         # 미검수 judged 행 2개(둘 다 held: not_reviewed). 실 DB 에 다른 held 가 있어도
         # 스코프가 걸리면 대상 id 만 세야 하므로 결정적.
@@ -1017,7 +1015,7 @@ def test_parent_barcode_conflict_holds_merged_child():
     자식은 parsed 로 hold 해 다음 실행에서 parent 와 함께 재시도하고, 빈 master 는 정리돼야."""
     from collections import Counter
     from promote import run_promotion
-    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
         # 기존의 '다른 상품' master 가 parent 바코드(SYN_BC_1)를 이미 소유(충돌 유발)
         cur.execute("""insert into product_masters
@@ -1047,8 +1045,87 @@ def test_parent_barcode_conflict_holds_merged_child():
         conn.rollback()
 
 
+def test_testdb_guard():
+    import os
+
+    from testdb import SOURCE_DB, TARGET_DB, _dsn_db
+
+    prod = "postgresql://postgres:x@localhost:54322/happycart"
+    try:
+        connect_test(prod)
+        check("connect_test: 운영 DB 거부", False, "예외 없음")
+    except RuntimeError:
+        check("connect_test: 운영 DB 거부", True)
+    old = os.environ.get("HAPPYCART_DSN")
+    os.environ["HAPPYCART_DSN"] = prod
+    try:
+        check("source_dsn = happycart_test (HAPPYCART_DSN 무시)",
+              _dsn_db(source_dsn()) == SOURCE_DB == "happycart_test", source_dsn())
+        check("target_dsn = happycart_test_target (HAPPYCART_DSN 무시)",
+              _dsn_db(target_dsn()) == TARGET_DB == "happycart_test_target", target_dsn())
+        check("review_dsn = happycart_test", _dsn_db(review_dsn()) == "happycart_test")
+    finally:
+        if old is None:
+            del os.environ["HAPPYCART_DSN"]
+        else:
+            os.environ["HAPPYCART_DSN"] = old
+
+
+def test_bootstrap_guard():
+    import os
+    import shutil
+    import stat
+    import subprocess
+    import tempfile
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    with tempfile.TemporaryDirectory() as tmp:
+        log = os.path.join(tmp, "docker.log")
+        fake_bin = os.path.join(tmp, "bin")
+        os.mkdir(fake_bin)
+        fake = os.path.join(fake_bin, "docker")
+        with open(fake, "w") as f:
+            f.write('#!/usr/bin/env bash\necho "$@" >> "%s"\ncat > /dev/null 2>&1 || true\n' % log)
+        os.chmod(fake, os.stat(fake).st_mode | stat.S_IEXEC)
+
+        def run(script_dir, db, confirm):
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(("HAPPYCART_", "BOOTSTRAP_"))}
+            env["PATH"] = fake_bin + os.pathsep + env.get("PATH", "")
+            env["HAPPYCART_PG_DB"] = db
+            if confirm is not None:
+                env["BOOTSTRAP_CONFIRM_DB"] = confirm
+            if os.path.exists(log):
+                os.remove(log)
+            r = subprocess.run(["bash", os.path.join(script_dir, "bootstrap_local.sh")],
+                               env=env, capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL)
+            calls = open(log).read() if os.path.exists(log) else ""
+            return r, calls
+
+        r, calls = run(here, "happycart_test", None)
+        check("bootstrap 가드: 확인 변수 없음 -> 종료 1, drop 없음",
+              r.returncode == 1 and "drop" not in calls and "다릅니다" in r.stderr + r.stdout,
+              f"rc={r.returncode} calls={calls!r}")
+        r, calls = run(here, "happycart_test", "happycart")
+        check("bootstrap 가드: 확인 변수 불일치 -> 종료 1, drop 없음",
+              r.returncode == 1 and "drop" not in calls, f"rc={r.returncode} calls={calls!r}")
+
+        copy = os.path.join(tmp, "copy")
+        os.makedirs(os.path.join(copy, "pipeline"))
+        shutil.copy(os.path.join(here, "bootstrap_local.sh"), os.path.join(copy, "pipeline"))
+        with open(os.path.join(copy, "pipeline", ".env"), "w") as f:
+            f.write("HAPPYCART_PG_DB=happycart\n")
+        r, calls = run(os.path.join(copy, "pipeline"), "happycart_test", "happycart_test")
+        drops = [ln for ln in calls.splitlines() if "drop database" in ln]
+        check("bootstrap 가드: .env보다 호출자 DB 우선, drop 대상 happycart_test",
+              len(drops) == 1 and "drop database if exists happycart_test;" in drops[0]
+              and "happycart;" not in drops[0].replace("happycart_test;", ""),
+              f"rc={r.returncode} drops={drops!r}")
+
+
 def main():
-    for t in [test_rpc_invariants, test_promoted_lock, test_bad_inputs,
+    for t in [test_testdb_guard, test_bootstrap_guard, test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
               test_rollback_scope, test_rollback_shared_master,
               test_rollback_shared_barcode, test_rollback_divergent_owner,
