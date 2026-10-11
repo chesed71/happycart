@@ -1173,6 +1173,32 @@ def test_bootstrap_guard():
               f"rc={r.returncode} drops={drops!r}")
 
 
+def test_tokenize_write_guard():
+    """읽은 뒤 원재료가 바뀌었거나 stage 가 바뀐 행에는 토큰을 쓰지 않는다."""
+    from tokenize_ingredients import write_tokens
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        cid = _fixture(cur, stage="parsed", ingredients="밀가루, 설탕")
+
+        def state():
+            cur.execute("select ingredients_tokens, stage from collected_products where id=%s", (cid,))
+            return cur.fetchone()
+
+        before = state()
+        r = write_tokens(cur, cid, "밀가루, 소금", ["밀가루", "소금"])
+        check("원문 불일치→False", r is False, str(r))
+        check("원문 불일치→토큰·stage 그대로", state() == before, str(state()))
+        r = write_tokens(cur, cid, "밀가루, 설탕", ["밀가루", "설탕", "X"])
+        tokens, stage = state()
+        check("원문 일치→True", r is True, str(r))
+        check("원문 일치→토큰 기록·tokenized", tokens == ["밀가루", "설탕", "X"] and stage == "tokenized",
+              f"{tokens} {stage}")
+        cur.execute("update collected_products set stage='judged' where id=%s", (cid,))
+        r = write_tokens(cur, cid, "밀가루, 설탕", ["Y"])
+        check("stage 가 parsed 아님→False", r is False and state()[0] == ["밀가루", "설탕", "X"], str(r))
+        conn.rollback()
+
+
 def main():
     for t in [test_testdb_guard, test_bootstrap_guard, test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
@@ -1195,7 +1221,8 @@ def main():
               test_clean_product_name_quantity_only,
               test_merged_child_verified_promotes_via_parent_only,
               test_dryrun_counts_merged_child_barcodes, test_held_counts_scoped_to_ids,
-              test_parent_barcode_conflict_holds_merged_child]:
+              test_parent_barcode_conflict_holds_merged_child,
+              test_tokenize_write_guard]:
         try:
             t()
         except Exception as e:  # noqa
