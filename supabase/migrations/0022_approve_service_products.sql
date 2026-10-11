@@ -10,7 +10,9 @@
 -- 거부(SQLSTATE 22023): 배열이 아니거나 비어 있음, 항목이 객체가 아님, id·updated_at 형식 오류·누락,
 -- expected_status 가 두 값이 아님, 같은 id 두 번.
 --
--- 동작: 대상 master 를 id 순서로 전부 for update 로 잠근 뒤(잠금 순서 고정 — 0021 업로드와 데드락 없음),
+-- 동작: 대상 master 를 id 순서로 전부 for update 로 잠근 뒤(id 순서 고정 — 0021과 같은 순서라 보통은
+-- 데드락이 없다. 다만 0021이 첫 잠금 뒤 새로 나타난 같은 키 master를 따로 잠그는 드문 경우엔
+-- 40P01로 한쪽이 실패할 수 있다 — 아무것도 바뀌지 않으며 다시 시도하면 된다),
 -- 항목마다 어긋남 사유를 정한다 — 행 없음 missing, verified_status 가 기대와 다름 status_changed,
 -- updated_at 이 받은 값과 다름 content_changed(상태가 다르면 상태 사유 우선).
 --   - 어긋남이 하나라도 있으면 아무것도 바꾸지 않고 ok=false, count=0, mismatches=[{id, reason}...]
