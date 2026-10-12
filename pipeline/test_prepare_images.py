@@ -10,11 +10,14 @@ main()(행 조회 → 소스 선택 → JPEG 변환 → image_path 갱신 → ma
 """
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -71,7 +74,7 @@ class _FakeConn:
         self.committed = True
 
 
-class PrepareImagesSourceTest(unittest.TestCase):
+class _PrepareImagesBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = self.tmp.name
@@ -99,18 +102,23 @@ class PrepareImagesSourceTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _run(self, rows):
+    def _run(self, rows, extra_argv=()):
+        # 조회 열 끝에 id 가 있다 — 6열로 준 행은 id 없음(None)으로 채운다.
+        rows = [r if len(r) == 7 else tuple(r) + (None,) for r in rows]
         conn = _FakeConn(rows)
         with mock.patch.object(prepare_images, "connect", lambda dsn=None: conn), \
-                mock.patch.object(sys, "argv", ["prepare_images.py"]), \
+                mock.patch.object(sys, "argv", ["prepare_images.py", *extra_argv]), \
                 mock.patch("builtins.print"):
             prepare_images.main()
         with open(self.manifest_path, encoding="utf-8") as fh:
             manifest = json.load(fh)
         updates = [p for q, p in conn.cur.executed if q.startswith("update collected_products")]
         barcode_updates = [p for q, p in conn.cur.executed if q.startswith("update product_barcodes")]
+        self.conn = conn
         return manifest, updates, barcode_updates
 
+
+class PrepareImagesSourceTest(_PrepareImagesBase):
     def test_kn_row_without_manual_upload_downloads_koreannet_image(self):
         raw = {"kn": {"name": "새우깡", "image_url": KN_URL}}
         manifest, updates, barcode_updates = self._run([("kn", KN_REF, KN_REF, raw, None, None)])
@@ -185,6 +193,181 @@ class PrepareImagesSourceTest(unittest.TestCase):
         out_path = os.path.join(self.out_dir, "8801043014809.jpg")
         self.assertEqual(updates, [(out_path, "cp", "123")])
         self.assertEqual(barcode_updates, [(cdn, "8801043014809")])
+
+
+ID_A = "11111111-1111-1111-1111-111111111111"
+ID_Y = "22222222-2222-2222-2222-222222222222"
+ID_Z = "33333333-3333-3333-3333-333333333333"
+BC_X = "8801000000017"
+BC_Y = "8801000000024"
+BC_Z = "8801000000031"
+BC_W = "8801000000048"
+
+
+def _entry(barcode):
+    return {"barcode": barcode, "source_image": "old", "source_url": None,
+            "local_path": f"/old/{barcode}.jpg", "bytes": 1, "sha256": "0",
+            "storage_target": f"products/{barcode}.jpg", "bucket": "product-images",
+            "oversized": False}
+
+
+def _row(barcode, row_id, with_url=True):
+    raw = {"kn": {"image_url": KN_URL.replace(KN_REF, barcode)}} if with_url else {"kn": {}}
+    return ("kn", barcode, barcode, raw, None, None, row_id)
+
+
+class PrepareImagesIdsTest(_PrepareImagesBase):
+    def _seed_manifest(self, *barcodes):
+        os.makedirs(os.path.dirname(self.manifest_path), exist_ok=True)
+        with open(self.manifest_path, "w", encoding="utf-8") as fh:
+            json.dump([_entry(b) for b in barcodes], fh)
+
+    def test_query_is_scoped_by_ids(self):
+        self._run([_row(BC_Y, ID_Y)], ["--ids", ID_A])
+        selects = [(q, p) for q, p in self.conn.cur.executed if q.startswith("select")]
+        self.assertEqual(len(selects), 1)
+        q, params = selects[0]
+        self.assertIn("id = any", q)
+        self.assertIn([ID_A], params)
+
+    def test_unrelated_manifest_entry_is_kept(self):
+        self._seed_manifest(BC_X)
+        manifest, _, _ = self._run([_row(BC_Y, ID_Y)], ["--ids", ID_Y])
+        self.assertEqual([e["barcode"] for e in manifest], [BC_X, BC_Y])
+
+    def test_two_runs_with_different_ids_keep_both(self):
+        self._run([_row(BC_Y, ID_Y)], ["--ids", ID_Y])
+        manifest, _, _ = self._run([_row(BC_Z, ID_Z)], ["--ids", ID_Z])
+        self.assertEqual([e["barcode"] for e in manifest], [BC_Y, BC_Z])
+
+    def test_missing_source_removes_old_entry(self):
+        self._seed_manifest(BC_X, BC_Y)
+        manifest, _, _ = self._run([_row(BC_Y, ID_Y, with_url=False)], ["--ids", ID_Y])
+        self.assertEqual([e["barcode"] for e in manifest], [BC_X])
+
+    def test_convert_failure_removes_old_entry(self):
+        self._seed_manifest(BC_X, BC_Y)
+        with mock.patch.object(prepare_images, "_to_jpeg", side_effect=OSError("boom")):
+            manifest, _, _ = self._run([_row(BC_Y, ID_Y)], ["--ids", ID_Y])
+        self.assertEqual([e["barcode"] for e in manifest], [BC_X])
+
+    def test_success_replaces_entry_in_place(self):
+        self._seed_manifest(BC_Y, BC_X)
+        manifest, _, _ = self._run([_row(BC_Y, ID_Y)], ["--ids", ID_Y])
+        self.assertEqual([e["barcode"] for e in manifest], [BC_Y, BC_X])
+        self.assertNotEqual(manifest[0]["source_image"], "old")
+
+    def test_without_ids_manifest_is_rewritten_fully(self):
+        self._seed_manifest(BC_X)
+        manifest, _, _ = self._run([_row(BC_Y, ID_Y)])
+        self.assertEqual([e["barcode"] for e in manifest], [BC_Y])
+        selects = [q for q, _ in self.conn.cur.executed if q.startswith("select")]
+        self.assertNotIn("id = any", selects[0])
+
+    def test_dry_run_with_ids_does_not_write_manifest(self):
+        self._seed_manifest(BC_X)
+        with open(self.manifest_path, encoding="utf-8") as fh:
+            before = fh.read()
+        self._run([_row(BC_Y, ID_Y)], ["--ids", ID_Y, "--dry-run"])
+        with open(self.manifest_path, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), before)
+
+    def test_merge_manifest_function(self):
+        existing = [_entry(BC_X), _entry(BC_Y)]
+        prepared = [dict(_entry(BC_Z), bytes=9)]
+        merged = prepare_images.merge_manifest(existing, prepared, {BC_Y})
+        self.assertEqual([e["barcode"] for e in merged], [BC_X, BC_Z])
+        self.assertEqual(merged[1]["bytes"], 9)
+
+    def test_merge_waits_for_lock_and_reads_latest_manifest(self):
+        # 다른 실행이 잠금을 쥔 채 manifest 를 바꾸는 동안 --ids 병합은 기다렸다가 바뀐 파일 위에 병합해야 한다.
+        # 잠금 없이 미리 읽으면 다른 실행이 지운 BC_X 를 되살리고 새로 쓴 BC_Z 를 잃는다.
+        self._seed_manifest(BC_X)
+        result = {}
+        with open(self.manifest_path + ".lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            t = threading.Thread(target=lambda: result.update(
+                out=prepare_images.write_manifest([_entry(BC_Y)], {BC_W})))
+            t.start()
+            t.join(0.3)
+            self.assertTrue(t.is_alive())
+            with open(self.manifest_path, "w", encoding="utf-8") as fh:
+                json.dump([_entry(BC_Z)], fh)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        manifest, removed = result["out"]
+        self.assertEqual([e["barcode"] for e in manifest], [BC_Z, BC_Y])
+        self.assertEqual(removed, 0)
+        with open(self.manifest_path, encoding="utf-8") as fh:
+            self.assertEqual([e["barcode"] for e in json.load(fh)], [BC_Z, BC_Y])
+        self.assertFalse(os.path.exists(self.manifest_path + ".tmp"))
+
+    def test_write_manifest_counts_removed_stale(self):
+        self._seed_manifest(BC_X, BC_Y)
+        manifest, removed = prepare_images.write_manifest([], {BC_Y, BC_W})
+        self.assertEqual([e["barcode"] for e in manifest], [BC_X])
+        self.assertEqual(removed, 1)
+
+    def test_empty_ids_exits_2(self):
+        r = subprocess.run([sys.executable, "prepare_images.py", "--ids", " , "],
+                           cwd=os.path.dirname(os.path.abspath(__file__)),
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+
+
+class PrepareImagesIdsDbTest(unittest.TestCase):
+    """지정하지 않은 행의 image_path 는 건드리지 않는다 (테스트 DB 전용, 연결 안 되면 skip)."""
+
+    def setUp(self):
+        import testdb
+
+        self.testdb = testdb
+        try:
+            self.conn = testdb.connect_test(testdb.source_dsn(), autocommit=True)
+        except Exception as e:  # noqa: BLE001
+            self.skipTest(f"테스트 DB 연결 불가: {e}")
+        self.addCleanup(self.conn.close)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.refs = ["TPI-A", "TPI-B"]
+        self.barcodes = ["8809990000011", "8809990000028"]
+        self._cleanup_rows()
+        self.addCleanup(self._cleanup_rows)
+
+    def _cleanup_rows(self):
+        self.conn.execute("delete from collected_products where source_ref like 'TPI-%'")
+        self.conn.execute("delete from product_barcodes where barcode = any(%s)", (self.barcodes,))
+
+    def test_only_target_row_image_path_changes(self):
+        output = os.path.join(self.tmp.name, "output")
+        os.makedirs(os.path.join(output, "_uploads"))
+        ids = []
+        for ref, bc in zip(self.refs, self.barcodes):
+            with open(os.path.join(output, "_uploads", f"cp__{ref}.png"), "wb") as fh:
+                fh.write(_png_bytes())
+            row = self.conn.execute(
+                "insert into collected_products (source, source_ref, raw, barcode, stage, image_path)"
+                " values ('cp', %s, '{}'::jsonb, %s, 'promoted', %s) returning id",
+                (ref, bc, f"old/{ref}.jpg"),
+            ).fetchone()
+            ids.append(str(row[0]))
+        work = os.path.join(self.tmp.name, "work")
+        manifest_path = os.path.join(work, "manifest.json")
+        with mock.patch.object(prepare_images, "COUPANG_OUTPUT", output), \
+                mock.patch.object(prepare_images, "OUT_DIR", os.path.join(work, "products")), \
+                mock.patch.object(prepare_images, "MANIFEST_PATH", manifest_path), \
+                mock.patch.object(sys, "argv", ["prepare_images.py", "--dsn",
+                                                self.testdb.source_dsn(), "--ids", ids[0]]), \
+                mock.patch("builtins.print"):
+            prepare_images.main()
+        paths = dict(self.conn.execute(
+            "select source_ref, image_path from collected_products where source_ref like 'TPI-%'"
+        ).fetchall())
+        self.assertEqual(paths["TPI-A"], "_uploads/cp__TPI-A.png")
+        self.assertEqual(paths["TPI-B"], "old/TPI-B.jpg")
+        with open(manifest_path, encoding="utf-8") as fh:
+            self.assertEqual([e["barcode"] for e in json.load(fh)], [self.barcodes[0]])
 
 
 if __name__ == "__main__":

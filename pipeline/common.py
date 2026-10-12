@@ -4,9 +4,11 @@
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
+import uuid
 
 import psycopg
 
@@ -48,6 +50,21 @@ def dsn(db: str | None = None) -> str:
         f"{os.environ.get('HAPPYCART_PG_HOST', 'localhost')}:"
         f"{os.environ.get('HAPPYCART_PG_PORT', '54322')}/{db}"
     )
+
+
+def id_list_arg(text: str) -> list[str]:
+    """--ids 인자 파서: 콤마 구분 uuid → 정규형 목록. 빈 목록은 거부(전체 실행으로 바뀌는 것 방지)."""
+    out = []
+    for part in text.split(","):
+        part = part.strip()
+        if part:
+            try:
+                out.append(str(uuid.UUID(part)))
+            except ValueError:
+                raise argparse.ArgumentTypeError(f"uuid 형식이 아님: {part}")
+    if not out:
+        raise argparse.ArgumentTypeError("--ids 에 uuid 가 하나도 없음")
+    return out
 
 
 def connect(override_dsn: str | None = None) -> psycopg.Connection:

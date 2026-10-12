@@ -21,6 +21,7 @@ image_url(Storage public URL)은 운영 업로드 성공 후 upload_prod.py 가 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import hashlib
 import io
@@ -29,7 +30,7 @@ import os
 import re
 from collections import Counter
 
-from common import COUPANG_OUTPUT, KAKAMUKA_ROOT, connect
+from common import COUPANG_OUTPUT, KAKAMUKA_ROOT, connect, id_list_arg
 
 # 쿠팡 CDN 썸네일 박스 크기 — 서비스 대표 이미지를 고해상도로 받는다(원본이 크면 그만큼 선명).
 _COUPANG_BOX = re.compile(r"/\d+x\d+(?:ex)?/")
@@ -161,22 +162,60 @@ def _to_jpeg(path: str) -> bytes:
     return buf.getvalue()  # 50 에서도 초과하면 그대로 (드문 케이스 — 리포트로 드러남)
 
 
+def merge_manifest(existing: list, prepared: list, failed_barcodes: set) -> list:
+    """--ids 실행의 manifest 병합. 기존 순서를 유지하고 새 바코드는 뒤에 붙인다.
+    이번에 준비된 바코드는 교체·추가, 이번 대상이었는데 실패한 바코드는 예전 항목 삭제, 나머지는 그대로."""
+    merged = {e["barcode"]: e for e in existing}
+    for barcode in failed_barcodes:
+        merged.pop(barcode, None)
+    for e in prepared:
+        merged[e["barcode"]] = e
+    return list(merged.values())
+
+
+def write_manifest(prepared: list, failed_barcodes: set | None) -> tuple[list, int]:
+    """manifest 를 잠금 아래에서 쓴다. failed_barcodes 가 None 이면 통째로 교체(전체 실행),
+    아니면 잠금을 잡은 뒤 다시 읽어 병합한다(--ids). 동시 실행이 서로의 갱신·삭제를 덮지 않게
+    읽기·병합·쓰기를 한 잠금 안에 두고, 임시 파일에 쓴 뒤 os.replace 로 바꿔 반쯤 쓴 파일을 남기지 않는다.
+    반환: (쓴 manifest, 실패로 지운 예전 항목 수)."""
+    os.makedirs(os.path.dirname(MANIFEST_PATH), exist_ok=True)
+    with open(MANIFEST_PATH + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        removed = 0
+        manifest = prepared
+        if failed_barcodes is not None:
+            existing = []
+            if os.path.exists(MANIFEST_PATH):
+                with open(MANIFEST_PATH, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+            manifest = merge_manifest(existing, prepared, failed_barcodes)
+            removed = len({e["barcode"] for e in existing} & failed_barcodes)
+        tmp = MANIFEST_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, MANIFEST_PATH)
+    return manifest, removed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dsn", default=None)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--source", default=None)
     ap.add_argument("--source-ref", default=None)
+    ap.add_argument("--ids", type=id_list_arg, default=None,
+                    help="콤마 구분 collected_products.id — 이 행만 준비하고 manifest 는 병합")
     args = ap.parse_args()
     stats = Counter()
     manifest = []
+    failed_barcodes = set()
 
     if not args.dry_run:
         os.makedirs(OUT_DIR, exist_ok=True)
 
     with connect(args.dsn) as conn, conn.cursor() as cur:
         query = """
-            select source, source_ref, barcode, raw, raw->>'source_url', image_path
+            select source, source_ref, barcode, raw, raw->>'source_url', image_path, id
             from collected_products
             where stage = 'promoted' and barcode is not null
         """
@@ -187,17 +226,25 @@ def main():
         if args.source_ref:
             query += " and source_ref = %s"
             params.append(args.source_ref)
+        if args.ids:
+            query += " and id = any(%s::uuid[])"
+            params.append(args.ids)
         query += " order by source, source_ref"
         cur.execute(query, params)
         rows = cur.fetchall()
 
-        for source, source_ref, barcode, raw, source_url, image_path in rows:
+        if args.ids:
+            found = {str(r[6]) for r in rows}
+            stats["ids_not_promoted"] = sum(1 for i in args.ids if i not in found)
+
+        for source, source_ref, barcode, raw, source_url, image_path, _id in rows:
             raw = raw or {}
             # 수동 등록 이미지(_uploads)가 있으면 최우선 — CDN/detail 로 덮지 않는다.
             manual = _manual_upload(source, source_ref, barcode)
             src = manual or _find_source_image(source, source_ref, raw, image_path)
             if not src:
                 stats["no_source_image"] += 1
+                failed_barcodes.add(barcode)
                 continue
             # 출처 기록용 CDN URL (벤더 썸네일). 로컬 변환 파일이 detail/Koreannet 이라도
             # 가용한 원본 URL 로 provenance 를 남긴다.
@@ -222,6 +269,7 @@ def main():
             except Exception as e:  # noqa: BLE001 — 한 건 실패가 전체를 막지 않게
                 print(f"  convert 실패 {barcode} ({src}): {e}")
                 stats["convert_failed"] += 1
+                failed_barcodes.add(barcode)
                 continue
 
             with open(out_path, "wb") as fh:
@@ -263,8 +311,9 @@ def main():
 
         if not args.dry_run:
             conn.commit()
-            with open(MANIFEST_PATH, "w", encoding="utf-8") as fh:
-                json.dump(manifest, fh, ensure_ascii=False, indent=2)
+            manifest, removed = write_manifest(manifest, failed_barcodes if args.ids else None)
+            if args.ids:
+                stats["removed_stale"] = removed
 
     print(f"\nprepare_images: {dict(stats)}")
     if not args.dry_run:
