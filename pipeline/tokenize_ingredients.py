@@ -12,7 +12,7 @@ import argparse
 import json
 from collections import Counter
 
-from common import connect, dsn
+from common import connect, dsn, id_list_arg
 from tokenizer import tokenize
 
 FIXTURE = "/Users/innovator/Project/HappyCart/happycart/tool/fixtures/seed_products.json"
@@ -137,12 +137,12 @@ def main():
     ap.add_argument("--golden", action="store_true")
     ap.add_argument("--source", default=None)
     ap.add_argument("--source-ref", default=None)
-    ap.add_argument("--ids", default=None,
+    ap.add_argument("--ids", type=id_list_arg, default=None,
                     help="콤마구분 collected_products.id 만 토큰화 (데이터데스크 승격보류 일괄용)")
     args = ap.parse_args()
     if args.golden:
         raise SystemExit(run_golden())
-    ids = [x for x in args.ids.split(",") if x] if args.ids else None
+    ids = args.ids
     run_tokenize(args.dsn, args.source, args.source_ref, ids)
 
 

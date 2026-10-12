@@ -16,7 +16,7 @@ import os
 import subprocess
 from collections import Counter
 
-from common import connect
+from common import connect, id_list_arg
 
 # 기본 앱 디렉터리 — judge.py(pipeline/) 기준 형제 happycart 로 파생(워크스테이션 무관).
 # CLI --app-dir / 환경변수 HAPPYCART_APP_DIR 로 재정의.
@@ -150,7 +150,7 @@ def main():
     ap.add_argument("--target", choices=["collected", "masters"], default="collected")
     ap.add_argument("--source", default=None)
     ap.add_argument("--source-ref", default=None)
-    ap.add_argument("--ids", default=None,
+    ap.add_argument("--ids", type=id_list_arg, default=None,
                     help="콤마구분 collected_products.id 만 판정 (데이터데스크 승격보류 일괄용)")
     ap.add_argument("--app-dir", default=None,
                     help="happycart 앱 디렉터리 (미지정 시 HAPPYCART_APP_DIR 환경변수 또는 기본값)")
@@ -160,7 +160,7 @@ def main():
     stats = Counter()
     rule_version = current_rule_version(app_dir)
     print(f"rule_version = {rule_version}")
-    ids = [x for x in args.ids.split(",") if x] if args.ids else None
+    ids = args.ids
 
     with connect(args.dsn) as conn:
         if args.target == "collected":

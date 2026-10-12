@@ -24,7 +24,7 @@ import argparse
 import re
 from collections import Counter
 
-from common import connect
+from common import connect, id_list_arg
 
 # 검토 필요(flagged)와 종료 판정(missing_*) 태그 — 후보 쿼리와 머지 자식 보류 판정이 같은
 # 집합을 쓴다(데이터데스크 레인 설계 2026-10-08)
@@ -385,7 +385,7 @@ def main():
     ap.add_argument("--source-ref", default=None)
     ap.add_argument("--id", default=None,
                     help="단일 collected_products.id만 승격 (데이터데스크 카드별 승격용)")
-    ap.add_argument("--ids", default=None,
+    ap.add_argument("--ids", type=id_list_arg, default=None,
                     help="콤마구분 collected_products.id 집합만 승격 (데이터데스크 승격보류 일괄용)")
     args = ap.parse_args()
     stats = Counter()
