@@ -21,6 +21,7 @@ image_url(Storage public URL)은 운영 업로드 성공 후 upload_prod.py 가 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import hashlib
 import io
@@ -172,6 +173,30 @@ def merge_manifest(existing: list, prepared: list, failed_barcodes: set) -> list
     return list(merged.values())
 
 
+def write_manifest(prepared: list, failed_barcodes: set | None) -> tuple[list, int]:
+    """manifest 를 잠금 아래에서 쓴다. failed_barcodes 가 None 이면 통째로 교체(전체 실행),
+    아니면 잠금을 잡은 뒤 다시 읽어 병합한다(--ids). 동시 실행이 서로의 갱신·삭제를 덮지 않게
+    읽기·병합·쓰기를 한 잠금 안에 두고, 임시 파일에 쓴 뒤 os.replace 로 바꿔 반쯤 쓴 파일을 남기지 않는다.
+    반환: (쓴 manifest, 실패로 지운 예전 항목 수)."""
+    os.makedirs(os.path.dirname(MANIFEST_PATH), exist_ok=True)
+    with open(MANIFEST_PATH + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        removed = 0
+        manifest = prepared
+        if failed_barcodes is not None:
+            existing = []
+            if os.path.exists(MANIFEST_PATH):
+                with open(MANIFEST_PATH, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+            manifest = merge_manifest(existing, prepared, failed_barcodes)
+            removed = len({e["barcode"] for e in existing} & failed_barcodes)
+        tmp = MANIFEST_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, MANIFEST_PATH)
+    return manifest, removed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dsn", default=None)
@@ -286,17 +311,9 @@ def main():
 
         if not args.dry_run:
             conn.commit()
+            manifest, removed = write_manifest(manifest, failed_barcodes if args.ids else None)
             if args.ids:
-                existing = []
-                if os.path.exists(MANIFEST_PATH):
-                    with open(MANIFEST_PATH, encoding="utf-8") as fh:
-                        existing = json.load(fh)
-                manifest = merge_manifest(existing, manifest, failed_barcodes)
-                stats["removed_stale"] = len(
-                    {e["barcode"] for e in existing} & failed_barcodes
-                )
-            with open(MANIFEST_PATH, "w", encoding="utf-8") as fh:
-                json.dump(manifest, fh, ensure_ascii=False, indent=2)
+                stats["removed_stale"] = removed
 
     print(f"\nprepare_images: {dict(stats)}")
     if not args.dry_run:

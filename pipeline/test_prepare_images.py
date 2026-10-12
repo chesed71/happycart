@@ -10,12 +10,14 @@ main()(행 조회 → 소스 선택 → JPEG 변환 → image_path 갱신 → ma
 """
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -199,6 +201,7 @@ ID_Z = "33333333-3333-3333-3333-333333333333"
 BC_X = "8801000000017"
 BC_Y = "8801000000024"
 BC_Z = "8801000000031"
+BC_W = "8801000000048"
 
 
 def _entry(barcode):
@@ -275,6 +278,36 @@ class PrepareImagesIdsTest(_PrepareImagesBase):
         merged = prepare_images.merge_manifest(existing, prepared, {BC_Y})
         self.assertEqual([e["barcode"] for e in merged], [BC_X, BC_Z])
         self.assertEqual(merged[1]["bytes"], 9)
+
+    def test_merge_waits_for_lock_and_reads_latest_manifest(self):
+        # 다른 실행이 잠금을 쥔 채 manifest 를 바꾸는 동안 --ids 병합은 기다렸다가 바뀐 파일 위에 병합해야 한다.
+        # 잠금 없이 미리 읽으면 다른 실행이 지운 BC_X 를 되살리고 새로 쓴 BC_Z 를 잃는다.
+        self._seed_manifest(BC_X)
+        result = {}
+        with open(self.manifest_path + ".lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            t = threading.Thread(target=lambda: result.update(
+                out=prepare_images.write_manifest([_entry(BC_Y)], {BC_W})))
+            t.start()
+            t.join(0.3)
+            self.assertTrue(t.is_alive())
+            with open(self.manifest_path, "w", encoding="utf-8") as fh:
+                json.dump([_entry(BC_Z)], fh)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        t.join(5)
+        self.assertFalse(t.is_alive())
+        manifest, removed = result["out"]
+        self.assertEqual([e["barcode"] for e in manifest], [BC_Z, BC_Y])
+        self.assertEqual(removed, 0)
+        with open(self.manifest_path, encoding="utf-8") as fh:
+            self.assertEqual([e["barcode"] for e in json.load(fh)], [BC_Z, BC_Y])
+        self.assertFalse(os.path.exists(self.manifest_path + ".tmp"))
+
+    def test_write_manifest_counts_removed_stale(self):
+        self._seed_manifest(BC_X, BC_Y)
+        manifest, removed = prepare_images.write_manifest([], {BC_Y, BC_W})
+        self.assertEqual([e["barcode"] for e in manifest], [BC_X])
+        self.assertEqual(removed, 1)
 
     def test_empty_ids_exits_2(self):
         r = subprocess.run([sys.executable, "prepare_images.py", "--ids", " , "],
