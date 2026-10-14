@@ -7,6 +7,7 @@ import '../../core/disclaimer_card.dart';
 import '../../core/verdict.dart';
 import '../../data/models/product_lookup_result.dart';
 import 'ingredient_table.dart';
+import 'report_sheet.dart';
 import 'result_risk_tier.dart';
 import 'result_state.dart';
 
@@ -259,7 +260,10 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                     ),
                   ),
                 ),
-                _IconBtn(icon: Icons.ios_share_rounded, onTap: () {}),
+                _ReportPill(
+                  onTap: () =>
+                      showReportSheet(context, product: widget.product),
+                ),
               ],
             ),
           ),
@@ -349,13 +353,19 @@ class _SuccessLayoutState extends State<_SuccessLayout>
   }
 
   /// "전체 성분표 보기" → 라벨 원문 성분을 바텀시트로 노출한다.
-  void _openIngredientTable(BuildContext context) {
-    showModalBottomSheet<void>(
+  Future<void> _openIngredientTable(BuildContext context) async {
+    // 시트가 `true` 로 닫히면 "이 정보가 틀렸나요?" 를 누른 것이다.
+    // 시트 안에서 바로 열면 그 시트의 context 가 이미 사라진 뒤라, 결과를
+    // 돌려받아 여기서 연다.
+    final wantsReport = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _IngredientTableSheet(product: widget.product),
     );
+    if (wantsReport == true && context.mounted) {
+      await showReportSheet(context, product: widget.product);
+    }
   }
 
   Widget _buildFooter(BuildContext context) {
@@ -418,6 +428,49 @@ class _SuccessLayoutState extends State<_SuccessLayout>
 // ────────────────────────────────────────────────────────────────
 // 소형 공용 위젯
 // ────────────────────────────────────────────────────────────────
+/// 상단 바 오른쪽 — 데이터 오류 신고 진입점.
+///
+/// 원래 이 자리에 있던 공유 아이콘은 핸들러가 비어 있어 눌러도 아무 일도
+/// 일어나지 않았다(공유 기능 자체가 앱에 없다). 그 자리를 대체한다.
+class _ReportPill extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ReportPill({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        // 알약 자체는 32px 이지만 터치 영역은 바 높이 전체로 잡는다(44pt 기준).
+        height: 52,
+        padding: const EdgeInsets.fromLTRB(4, 0, 6, 0),
+        alignment: Alignment.center,
+        child: Container(
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 13),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            // inkSoft 채움 — 히어로 배경 4종 어디서도 6.09:1 이상이라 경계가
+            // 보인다. 흰 알약(1.04:1)은 배경에 묻혔고, 빨강은 앱의 '위험'
+            // 의미와 겹쳐서 쓰지 않는다.
+            color: AppTheme.inkSoft,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: const Text(
+            '오류 신고',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _IconBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
@@ -792,9 +845,9 @@ class _IngredientTableSheet extends StatelessWidget {
           // 본문 — 성분을 배지로 나열(주의 성분만 색 강조).
           Flexible(
             child: entries.isEmpty
-                ? _EmptyIngredients(bottomPad: bottomPad)
+                ? const _EmptyIngredients(bottomPad: 0)
                 : SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(18, 14, 18, 16 + bottomPad),
+                    padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
                     child: Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -804,6 +857,36 @@ class _IngredientTableSheet extends StatelessWidget {
                       ],
                     ),
                   ),
+          ),
+          // 보조 진입점 — '잠깐' 화면은 히어로가 스크롤돼 상단 알약이 화면 밖으로
+          // 나가므로, 성분을 다 읽은 자리에서도 신고할 수 있게 둔다.
+          const Divider(height: 1, color: AppTheme.line),
+          Padding(
+            padding: EdgeInsets.only(bottom: bottomPad),
+            child: SizedBox(
+              height: 48,
+              child: TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.inkSoft,
+                  shape: const RoundedRectangleBorder(),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      '이 정보가 틀렸나요?',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(width: 4),
+                    Icon(Icons.chevron_right_rounded, size: 18),
+                  ],
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -1272,6 +1355,10 @@ class _NotFoundLayout extends StatelessWidget {
             const Spacer(),
             const DisclaimerCard(),
             const SizedBox(height: 16),
+            // 1261행 주석이 말하는 '제보'를 실제로 할 수 있는 유일한 경로.
+            // 미등록 화면은 상단 바가 없어 알약을 둘 자리가 없다.
+            RegisterRequestButton(barcode: barcode),
+            const SizedBox(height: 10),
             _ScanButton(label: '다시 스캔하기', onPressed: onRescan),
           ],
         ),

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'exceptions.dart';
+import 'models/data_report.dart';
 import 'models/product_lookup_result.dart';
 
 /// RPC 호출 시그니처. `SupabaseClient.rpc` 의 얇은 추상화로, 테스트에서
@@ -53,6 +54,34 @@ class ProductRepository {
       ).timeout(_timeout);
     } catch (_) {
       // 백그라운드 적재 실패는 무시
+    }
+  }
+
+  /// 데이터 오류 신고를 1건 적재한다.
+  ///
+  /// 성공하면 `true`. 실패는 예외를 던지지 않고 `false` 로 돌려준다 —
+  /// 호출자(신고 시트)가 할 일은 "다시 시도해주세요" 안내뿐이고, 실패 원인별로
+  /// 다르게 행동할 여지가 없기 때문이다.
+  Future<bool> reportDataError({
+    required String barcode,
+    required ReportReason reason,
+    List<ReportedIngredient> ingredients = const [],
+  }) async {
+    try {
+      await _rpc(
+        'report_data_error',
+        params: {
+          'p_barcode': barcode,
+          'p_reason': reason.code,
+          // 0023 의 data_reports_ingredients_len CHECK 과 같은 상한.
+          // 넘기면 DB 가 거절하므로 보내기 전에 자른다.
+          'p_ingredients':
+              ingredients.take(50).map((e) => e.toJson()).toList(),
+        },
+      ).timeout(_timeout);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
