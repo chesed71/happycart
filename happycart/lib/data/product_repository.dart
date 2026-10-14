@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'exceptions.dart';
+import 'models/data_report.dart';
 import 'models/product_lookup_result.dart';
 
 /// RPC 호출 시그니처. `SupabaseClient.rpc` 의 얇은 추상화로, 테스트에서
@@ -18,6 +19,10 @@ typedef RpcExecutor = Future<dynamic> Function(
 
 /// 스펙 §7 — 네트워크 응답이 5초 안에 오지 않으면 타임아웃 처리.
 const Duration _defaultRpcTimeout = Duration(seconds: 5);
+
+/// 오류 신고 1건에 담는 지목 성분의 상한 — 0023 의 RPC 와 같은 값.
+const int _maxReportedIngredients = 50;
+const int _maxIngredientTextLength = 200;
 
 /// `lookup_product` RPC 만을 호출하는 얇은 어댑터.
 ///
@@ -53,6 +58,38 @@ class ProductRepository {
       ).timeout(_timeout);
     } catch (_) {
       // 백그라운드 적재 실패는 무시
+    }
+  }
+
+  /// 데이터 오류 신고를 1건 적재한다.
+  ///
+  /// 성공하면 `true`. 실패는 예외를 던지지 않고 `false` 로 돌려준다 —
+  /// 호출자(신고 시트)가 할 일은 "다시 시도해주세요" 안내뿐이고, 실패 원인별로
+  /// 다르게 행동할 여지가 없기 때문이다.
+  Future<bool> reportDataError({
+    required String barcode,
+    required ReportReason reason,
+    List<ReportedIngredient> ingredients = const [],
+  }) async {
+    try {
+      await _rpc(
+        'report_data_error',
+        params: {
+          'p_barcode': barcode,
+          'p_reason': reason.code,
+          // 0023 의 report_data_error 가 거르는 상한과 같은 값이다. 서버가
+          // 거절하면 사용자는 "연결을 확인하세요"만 보게 되므로, 보내기 전에
+          // 여기서 맞춰 자른다. 쉼표 없는 라벨은 성분 조각 하나가 수백 자가
+          // 될 수 있어 길이 상한이 실제로 걸린다.
+          'p_ingredients': ingredients
+              .take(_maxReportedIngredients)
+              .map((e) => e.truncated(_maxIngredientTextLength).toJson())
+              .toList(),
+        },
+      ).timeout(_timeout);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
