@@ -20,6 +20,10 @@ typedef RpcExecutor = Future<dynamic> Function(
 /// 스펙 §7 — 네트워크 응답이 5초 안에 오지 않으면 타임아웃 처리.
 const Duration _defaultRpcTimeout = Duration(seconds: 5);
 
+/// 오류 신고 1건에 담는 지목 성분의 상한 — 0023 의 RPC 와 같은 값.
+const int _maxReportedIngredients = 50;
+const int _maxIngredientTextLength = 200;
+
 /// `lookup_product` RPC 만을 호출하는 얇은 어댑터.
 ///
 /// MVP 에서 클라이언트가 알아야 하는 제품 정보는 RPC 한 번으로 끝난다 (스펙 §4.2).
@@ -73,10 +77,14 @@ class ProductRepository {
         params: {
           'p_barcode': barcode,
           'p_reason': reason.code,
-          // 0023 의 data_reports_ingredients_len CHECK 과 같은 상한.
-          // 넘기면 DB 가 거절하므로 보내기 전에 자른다.
-          'p_ingredients':
-              ingredients.take(50).map((e) => e.toJson()).toList(),
+          // 0023 의 report_data_error 가 거르는 상한과 같은 값이다. 서버가
+          // 거절하면 사용자는 "연결을 확인하세요"만 보게 되므로, 보내기 전에
+          // 여기서 맞춰 자른다. 쉼표 없는 라벨은 성분 조각 하나가 수백 자가
+          // 될 수 있어 길이 상한이 실제로 걸린다.
+          'p_ingredients': ingredients
+              .take(_maxReportedIngredients)
+              .map((e) => e.truncated(_maxIngredientTextLength).toJson())
+              .toList(),
         },
       ).timeout(_timeout);
       return true;

@@ -40,6 +40,19 @@ class ReportedIngredient {
 
   const ReportedIngredient({required this.text, this.canonicalKey});
 
+  /// [max] 자를 넘는 [text] 를 잘라낸 사본. 이내면 자기 자신을 돌려준다.
+  ///
+  /// 파서가 쉼표를 못 찾으면 조각 하나가 라벨 전체가 되는데, 운영자에게
+  /// 필요한 건 "어느 성분을 지목했는지"지 라벨 전문이 아니다. 말줄임표를
+  /// 남겨 잘렸다는 사실은 보이게 한다.
+  ReportedIngredient truncated(int max) {
+    if (text.length <= max) return this;
+    return ReportedIngredient(
+      text: '${text.substring(0, max - 1)}…',
+      canonicalKey: canonicalKey,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'text': text,
         if (canonicalKey != null) 'key': canonicalKey,

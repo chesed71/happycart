@@ -142,6 +142,36 @@ void main() {
     expect((seenParams!['p_ingredients'] as List).length, 50);
   });
 
+  test('reportDataError truncates over-long ingredient text', () async {
+    Map<String, dynamic>? seenParams;
+    final repo = ProductRepository.forTesting(
+      rpc: (_, {params}) async {
+        seenParams = params;
+        return null;
+      },
+    );
+
+    // 쉼표 없는 라벨은 성분 조각 하나가 라벨 전체가 된다 — 0023 의 200자
+    // 상한을 넘기면 서버가 거절하므로 앱이 먼저 자른다.
+    await repo.reportDataError(
+      barcode: '8809990172030',
+      reason: ReportReason.ingredientsMismatch,
+      ingredients: [
+        ReportedIngredient(text: '가' * 500, canonicalKey: 'aspartame'),
+        const ReportedIngredient(text: '정제수'),
+      ],
+    );
+
+    final sent = (seenParams!['p_ingredients'] as List)
+        .cast<Map<String, dynamic>>();
+    expect(sent[0]['text'], hasLength(200));
+    expect(sent[0]['text'], endsWith('…'));
+    // 잘려도 key 는 남아야 한다 — 운영자가 성분을 특정하는 수단이다.
+    expect(sent[0]['key'], 'aspartame');
+    // 상한 이내는 손대지 않는다.
+    expect(sent[1]['text'], '정제수');
+  });
+
   test('reportDataError returns false when the RPC fails', () async {
     final repo = ProductRepository.forTesting(
       rpc: (_, {params}) async => throw const SocketException('offline'),
