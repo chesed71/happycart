@@ -1,3 +1,4 @@
+import 'package:happycart/core/product_display_name.dart';
 import 'package:happycart/core/verdict.dart';
 import 'package:happycart_rules/happycart_rules.dart';
 
@@ -15,6 +16,9 @@ class ProductLookupResult {
 
   /// 제품명.
   final String name;
+
+  /// 화면에 보여 줄 제품명(끝의 용량·수량 표기를 뗌, [productDisplayName]).
+  String get displayName => productDisplayName(name);
 
   /// 용량 라벨 (예: `500ml`).
   final String size;

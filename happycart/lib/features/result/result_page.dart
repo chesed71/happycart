@@ -165,7 +165,11 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _buildHero(data, tier, fullscreen: false),
-                        _buildBody(data, tier, hasUnclassified: hasUnclassified),
+                        _buildBody(
+                          data,
+                          tier,
+                          hasUnclassified: hasUnclassified,
+                        ),
                       ],
                     ),
                   ),
@@ -192,7 +196,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
           child: _VerdictHeroArt(
             data: data,
             imageUrl: widget.product.imageUrl,
-            productName: widget.product.name,
+            productName: widget.product.displayName,
             size: fullscreen ? 300 : 264,
             // 상품 이미지는 `괜찮아요`에서만 노출한다(잠깐 단계는 마크만).
             showProduct: tier == RiskTier.ok,
@@ -274,7 +278,9 @@ class _SuccessLayoutState extends State<_SuccessLayout>
               child: LayoutBuilder(
                 builder: (context, constraints) => SingleChildScrollView(
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                    ),
                     child: Center(child: content),
                   ),
                 ),
@@ -680,7 +686,10 @@ class RiskNoteBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -730,7 +739,7 @@ class _ProductNamePill extends StatelessWidget {
           TextSpan(
             children: [
               TextSpan(
-                text: product.name,
+                text: product.displayName,
                 style: const TextStyle(
                   color: AppTheme.ink,
                   fontWeight: FontWeight.w700,
@@ -771,9 +780,7 @@ class _IngredientTableSheet extends StatelessWidget {
             badKeys: product.badIngredients,
             goodKeys: product.goodIngredients,
           );
-    final badCount = entries
-        .where((e) => e.mark == IngredientMark.bad)
-        .length;
+    final badCount = entries.where((e) => e.mark == IngredientMark.bad).length;
     final maxHeight = MediaQuery.sizeOf(context).height * 0.82;
     final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
 
@@ -816,7 +823,7 @@ class _IngredientTableSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${product.name} · ${product.brand}',
+                  '${product.displayName} · ${product.brand}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
