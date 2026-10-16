@@ -54,7 +54,8 @@ String _stripOnce(String t) {
     final open = _matchingOpen(body);
     if (open > 0 &&
         _parenExpr.hasMatch(body.substring(open + 1, body.length - 1))) {
-      return body.substring(0, open).trimRight();
+      final prefix = body.substring(0, open).trimRight();
+      return _danglingOperator.hasMatch(prefix) ? s : prefix;
     }
     if (multiply != null) return s;
   }
