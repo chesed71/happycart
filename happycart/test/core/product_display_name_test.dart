@@ -25,6 +25,21 @@ void main() {
       expect(productDisplayName('맥심 모카골드 12g x 100개입'), '맥심 모카골드');
     });
 
+    test('유니코드 단위 기호와 봉지·장·마리·박스·통·인분도 단위로 본다', () {
+      expect(productDisplayName('우유 900㎖'), '우유');
+      expect(productDisplayName('콜라 1.5ℓ'), '콜라');
+      expect(productDisplayName('쌀 10㎏'), '쌀');
+      expect(productDisplayName('과자 50g×2봉지'), '과자');
+      expect(productDisplayName('라면 5봉지'), '라면');
+      expect(productDisplayName('김 10장'), '김');
+      expect(productDisplayName('간장게장 2마리'), '간장게장');
+      expect(productDisplayName('사과 1박스'), '사과');
+      expect(productDisplayName('김치 1통'), '김치');
+      expect(productDisplayName('곰탕 2인분'), '곰탕');
+      // 티백 T 는 단위로 보지 않는다
+      expect(productDisplayName('녹차 25T'), '녹차 25T');
+    });
+
     test('용량이 아닌 숫자·괄호는 남긴다', () {
       expect(productDisplayName('진심 석류 100'), '진심 석류 100');
       expect(productDisplayName('불닭볶음면 2X'), '불닭볶음면 2X');
