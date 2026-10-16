@@ -39,6 +39,17 @@ void main() {
       expect(productDisplayName('가나 밀크 초콜릿, 70g, 10개'), '가나 밀크 초콜릿');
     });
 
+    test('수량식 앞이 연산자로 이어지면 일부만 지우지 않는다', () {
+      expect(productDisplayName('음료 2 x 500ml'), '음료 2 x 500ml');
+      expect(productDisplayName('음료 100g++20g'), '음료 100g++20g');
+      expect(productDisplayName('Max 500ml'), 'Max');
+    });
+
+    test('용량 괄호 뒤 묶음 표시도 함께 뗀다', () {
+      expect(productDisplayName('토레타 (500ML) x 3'), '토레타');
+      expect(productDisplayName('불닭볶음면 (2X) x 3'), '불닭볶음면 (2X) x 3');
+    });
+
     test('괄호 속이라도 단위 없는 숫자로 시작하면 남긴다', () {
       expect(productDisplayName('불닭볶음면 (2X)'), '불닭볶음면 (2X)');
       expect(productDisplayName('펩시 (라임) 500ml'), '펩시 (라임)');

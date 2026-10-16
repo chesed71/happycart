@@ -5,8 +5,9 @@
 /// - 끝의 수량식을 통째로 뗀다. 수량식 = 단위가 붙은 숫자("120g", "2,400ml", "3캔입")로 시작하고
 ///   묶음·더하기("x 3", "*6", "+20g")가 이어질 수 있다. 쉼표로 이어진 수량("70g, 10개")도 차례로 뗀다.
 /// - 끝의 괄호가 수량식만 담고 있으면("(500ML)", "(2.0L*2입)", "(30G(1 5G*20))") 괄호째 뗀다.
+///   그 뒤에 묶음 표시가 붙어도("(500ML) x 3") 함께 뗀다.
 /// - 단위 없는 숫자로 시작하는 것("석류 100", "2X", "(2X)"), 용량이 아닌 괄호("(라임)"), 이름 중간의 용량,
-///   끝까지 수량식이 아닌 것("100g+")은 남긴다.
+///   끝까지 수량식이 아닌 것("100g+"), 수량식 앞이 연산자로 이어진 것("2 x 500ml", "100g++20g")은 남긴다.
 /// - 괄호 짝이 안 맞거나 너무 긴 이름은 손대지 않는다. 다 지워지면 원래 이름을 돌려준다.
 String productDisplayName(String name) {
   final trimmed = name.trim();
@@ -31,6 +32,13 @@ const _expr = '$_num\\s*$_unit(?:\\s*[x×*+]\\s*$_num\\s*$_unit?)*';
 const _inner = '[\\d\\s.,x×*+]*(?:$_unit[\\d\\s.,x×*+]*)*';
 
 final _tailExpr = RegExp('\\s*$_expr\\s*\$', caseSensitive: false);
+// 괄호 뒤 묶음 표시("(500ML) x 3" 의 " x 3").
+final _tailMultiply = RegExp(
+  '\\s*[x×*]\\s*$_num\\s*$_unit?\\s*\$',
+  caseSensitive: false,
+);
+// 지울 수량식 바로 앞이 연산자면 수량식의 일부만 지우게 된다("2 x", "100g++").
+final _danglingOperator = RegExp(r'(?:[×*+]|\d\s*x)$', caseSensitive: false);
 final _parenExpr = RegExp(
   '^\\s*$_expr\\s*(?:\\($_inner\\))?\\s*\$',
   caseSensitive: false,
@@ -38,14 +46,23 @@ final _parenExpr = RegExp(
 
 String _stripOnce(String t) {
   final s = t.replaceFirst(RegExp(r'[\s,·/]+$'), '');
-  if (s.endsWith(')')) {
-    final open = _matchingOpen(s);
-    if (open > 0 && _parenExpr.hasMatch(s.substring(open + 1, s.length - 1))) {
-      return s.substring(0, open).trimRight();
+  final multiply = _tailMultiply.firstMatch(s);
+  final body = multiply == null
+      ? s
+      : s.substring(0, multiply.start).trimRight();
+  if (body.endsWith(')')) {
+    final open = _matchingOpen(body);
+    if (open > 0 &&
+        _parenExpr.hasMatch(body.substring(open + 1, body.length - 1))) {
+      return body.substring(0, open).trimRight();
     }
-    return s;
+    if (multiply != null) return s;
   }
-  return s.replaceFirst(_tailExpr, '').trimRight();
+  if (s.endsWith(')')) return s;
+  final m = _tailExpr.firstMatch(s);
+  if (m == null) return s;
+  final prefix = s.substring(0, m.start).trimRight();
+  return _danglingOperator.hasMatch(prefix) ? s : prefix;
 }
 
 // 끝의 ')' 와 짝인 '(' 위치(없으면 -1).
