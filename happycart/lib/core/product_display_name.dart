@@ -37,8 +37,12 @@ final _tailMultiply = RegExp(
   '\\s*[x×*]\\s*$_num\\s*$_unit?\\s*\$',
   caseSensitive: false,
 );
-// 지울 수량식 바로 앞이 연산자면 수량식의 일부만 지우게 된다("2 x", "100g++").
-final _danglingOperator = RegExp(r'(?:[×*+]|\d\s*x)$', caseSensitive: false);
+// 지울 수량식 바로 앞이 연산자면 수량식의 일부만 지우게 된다("2 x", "100g++", "500ml x", "(500ml) x").
+// 글자 x 는 숫자·숫자+단위·닫는 괄호 뒤일 때만 연산자로 본다("Max" 의 x 는 아님).
+final _danglingOperator = RegExp(
+  '(?:[×*+]|(?:\\d|\\d\\s*$_unit|\\))\\s*x)\$',
+  caseSensitive: false,
+);
 final _parenExpr = RegExp(
   '^\\s*$_expr\\s*(?:\\($_inner\\))?\\s*\$',
   caseSensitive: false,

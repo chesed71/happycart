@@ -47,6 +47,9 @@ void main() {
       expect(productDisplayName('음료 100g++(20g)'), '음료 100g++(20g)');
       expect(productDisplayName('음료 2 x (500ml) x 3'), '음료 2 x (500ml) x 3');
       expect(productDisplayName('음료 100g + (20g)'), '음료 100g + (20g)');
+      expect(productDisplayName('음료 500ml x (3개)'), '음료 500ml x (3개)');
+      expect(productDisplayName('음료 (500ml) x (3개)'), '음료 (500ml) x (3개)');
+      expect(productDisplayName('음료 500ml x (3개) x 2'), '음료 500ml x (3개) x 2');
     });
 
     test('용량 괄호 뒤 묶음 표시도 함께 뗀다', () {
