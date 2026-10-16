@@ -9,6 +9,7 @@ import 'package:happycart/features/result/result_state.dart';
 import 'package:happycart_rules/happycart_rules.dart';
 
 ProductLookupResult _product({
+  String name = '사이다볼',
   String? imageUrl,
   String ingredientsRaw = '',
   List<String> badIngredients = const ['blue_1', 'sugar'],
@@ -17,7 +18,7 @@ ProductLookupResult _product({
 }) => ProductLookupResult(
   barcode: '8809990172030',
   brand: '웰코리아',
-  name: '사이다볼',
+  name: name,
   size: '9g',
   category: '캔디류',
   imageUrl: imageUrl,
@@ -755,6 +756,38 @@ void main() {
       expect(find.textContaining('성분 이름 기준으로'), findsNothing);
       expect(find.byType(DisclaimerCard), findsOneWidget);
     });
+  });
+
+  testWidgets('상품명 끝의 용량은 이름표·성분표 부제·이미지 설명 어디에도 보이지 않는다', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResultPage(
+          state: ResultState.success(
+            _product(
+              name: '사이다볼 9g',
+              imageUrl: 'https://thumbnail.coupangcdn.com/product.jpg',
+              ingredientsRaw: '설탕',
+              badIngredients: const [],
+              reasonCodes: const [],
+              verdict: Verdict.okay,
+            ),
+          ),
+          onRescan: () {},
+        ),
+      ),
+    );
+
+    // 이미지 설명(semanticLabel)
+    expect(productImage(), findsOneWidget);
+    // 이름표: 이름(진한 글씨) + '  ·  브랜드'
+    expect(find.textContaining('사이다볼 9g', findRichText: true), findsNothing);
+    expect(find.textContaining('사이다볼', findRichText: true), findsWidgets);
+
+    // 전체 성분표 부제
+    await tester.tap(find.text('전체 성분표 보기'));
+    await tester.pumpAndSettle();
+    expect(find.text('사이다볼 · 웰코리아'), findsOneWidget);
+    expect(find.textContaining('9g', findRichText: true), findsNothing);
   });
 
   group('전체 성분표 바텀시트', () {

@@ -2,12 +2,16 @@
 ///
 /// 용량만 다른 바코드는 한 상품(master)으로 묶여 같은 이름을 보여 주므로,
 /// 이름 속 용량("80g")이 찍은 바코드의 실제 용량과 다를 수 있다. 그래서 화면에는 용량을 보이지 않는다.
-/// - 끝의 "숫자+단위"("120g", "24포", "2,400ml", "3캔입")와 묶음 표시("x 3", "*2입")를 반복해서 뗀다.
-/// - 끝의 괄호가 용량·수량만 담고 있으면("(500ML)", "(2.0L*2입)", "(30G(1 5G*20))") 괄호째 뗀다.
-/// - 단위 없는 숫자("석류 100", "2X")와 용량이 아닌 괄호("(라임)"), 이름 중간의 용량은 남긴다.
-/// - 다 지워지면 원래 이름을 돌려준다.
+/// - 끝의 수량식을 통째로 뗀다. 수량식 = 단위가 붙은 숫자("120g", "2,400ml", "3캔입")로 시작하고
+///   묶음·더하기("x 3", "*6", "+20g")가 이어질 수 있다. 쉼표로 이어진 수량("70g, 10개")도 차례로 뗀다.
+/// - 끝의 괄호가 수량식만 담고 있으면("(500ML)", "(2.0L*2입)", "(30G(1 5G*20))") 괄호째 뗀다.
+/// - 단위 없는 숫자로 시작하는 것("석류 100", "2X", "(2X)"), 용량이 아닌 괄호("(라임)"), 이름 중간의 용량,
+///   끝까지 수량식이 아닌 것("100g+")은 남긴다.
+/// - 괄호 짝이 안 맞거나 너무 긴 이름은 손대지 않는다. 다 지워지면 원래 이름을 돌려준다.
 String productDisplayName(String name) {
-  var t = name.trim();
+  final trimmed = name.trim();
+  if (trimmed.length > _maxLength || !_balanced(trimmed)) return name;
+  var t = trimmed;
   while (true) {
     final next = _stripOnce(t);
     if (next == t) break;
@@ -16,46 +20,52 @@ String productDisplayName(String name) {
   return t.isEmpty ? name : t;
 }
 
+// 정규식을 끝에서부터 여러 위치로 맞춰 보므로 길이에 제곱으로 느려질 수 있다 — 상품명은 이보다 짧다.
+const _maxLength = 120;
+
+// 반복끼리 겹치지 않게 짠다(숫자 사이 구분자 필수, 반복마다 연산자 필수, 단위 글자는 구분자와 겹치지 않음).
 const _num = r'\d+(?:[.,]\d+)*';
-const _unit = r'(?:kg|mg|ml|g|l|ea|매|개|포|봉|팩|병|캔|정|구)입?|입';
+const _unit = r'(?:(?:kg|mg|ml|g|l|ea|매|개|포|봉|팩|병|캔|정|구)입?|입)';
+const _expr = '$_num\\s*$_unit(?:\\s*[x×*+]\\s*$_num\\s*$_unit?)*';
+// 괄호 안 한 단계 중첩: 숫자·공백·구분자·연산자와 단위만("1 5G*20").
+const _inner = '[\\d\\s.,x×*+]*(?:$_unit[\\d\\s.,x×*+]*)*';
 
-// 끝의 "숫자+단위" 또는 묶음 표시 "x 숫자(+단위)".
-final _tailQty = RegExp(
-  '(?:\\s*[x×*]\\s*$_num\\s*(?:$_unit)?|\\s*$_num\\s*(?:$_unit))\\s*\$',
-  caseSensitive: false,
-);
-
-// 용량·수량만 담은 괄호 내용(한 단계 중첩 허용).
-final _qtyOnly = RegExp(
-  '^(?:[\\s()x×*+/,]|$_num|$_unit)+\$',
+final _tailExpr = RegExp('\\s*$_expr\\s*\$', caseSensitive: false);
+final _parenExpr = RegExp(
+  '^\\s*$_expr\\s*(?:\\($_inner\\))?\\s*\$',
   caseSensitive: false,
 );
 
 String _stripOnce(String t) {
   final s = t.replaceFirst(RegExp(r'[\s,·/]+$'), '');
   if (s.endsWith(')')) {
-    final open = _openingParen(s);
-    if (open > 0) {
-      final inner = s.substring(open + 1, s.length - 1);
-      if (RegExp(r'\d').hasMatch(inner) && _qtyOnly.hasMatch(inner)) {
-        return s.substring(0, open).trimRight();
-      }
+    final open = _matchingOpen(s);
+    if (open > 0 && _parenExpr.hasMatch(s.substring(open + 1, s.length - 1))) {
+      return s.substring(0, open).trimRight();
     }
     return s;
   }
-  return s.replaceFirst(_tailQty, '').trimRight();
+  return s.replaceFirst(_tailExpr, '').trimRight();
 }
 
-// 끝의 ')' 와 짝이 맞는 '(' 위치(없으면 -1).
-int _openingParen(String s) {
+// 끝의 ')' 와 짝인 '(' 위치(없으면 -1).
+int _matchingOpen(String s) {
   var depth = 0;
   for (var i = s.length - 1; i >= 0; i--) {
-    final c = s[i];
-    if (c == ')') depth++;
-    if (c == '(') {
+    if (s[i] == ')') depth++;
+    if (s[i] == '(') {
       depth--;
       if (depth == 0) return i;
     }
   }
   return -1;
+}
+
+bool _balanced(String s) {
+  var depth = 0;
+  for (var i = 0; i < s.length; i++) {
+    if (s[i] == '(') depth++;
+    if (s[i] == ')' && --depth < 0) return false;
+  }
+  return depth == 0;
 }

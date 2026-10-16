@@ -33,6 +33,33 @@ void main() {
       expect(productDisplayName('7번가 피자 120g 치즈'), '7번가 피자 120g 치즈');
     });
 
+    test('더하기로 이어진 수량식은 통째로, 끝까지 수량식이 아니면 남긴다', () {
+      expect(productDisplayName('음료 100g+20g'), '음료');
+      expect(productDisplayName('음료 100g+'), '음료 100g+');
+      expect(productDisplayName('가나 밀크 초콜릿, 70g, 10개'), '가나 밀크 초콜릿');
+    });
+
+    test('괄호 속이라도 단위 없는 숫자로 시작하면 남긴다', () {
+      expect(productDisplayName('불닭볶음면 (2X)'), '불닭볶음면 (2X)');
+      expect(productDisplayName('펩시 (라임) 500ml'), '펩시 (라임)');
+    });
+
+    test('괄호 짝이 안 맞으면 손대지 않는다', () {
+      expect(productDisplayName('음료 ((500ml)'), '음료 ((500ml)');
+      expect(productDisplayName('음료 (500ml x3'), '음료 (500ml x3');
+    });
+
+    test('실패하는 긴 숫자 입력도 빠르게 끝난다', () {
+      final sw = Stopwatch()..start();
+      for (final k in [20, 40, 100, 5000]) {
+        final n = '상품 (${'1' * k}!)';
+        expect(productDisplayName(n), n);
+        final m = '상품 ${'1.' * k}1g!';
+        expect(productDisplayName(m), m);
+      }
+      expect(sw.elapsedMilliseconds, lessThan(500));
+    });
+
     test('다 지워지면 원래 이름', () {
       expect(productDisplayName('500ml'), '500ml');
       expect(productDisplayName(''), '');

@@ -165,11 +165,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _buildHero(data, tier, fullscreen: false),
-                        _buildBody(
-                          data,
-                          tier,
-                          hasUnclassified: hasUnclassified,
-                        ),
+                        _buildBody(data, tier, hasUnclassified: hasUnclassified),
                       ],
                     ),
                   ),
@@ -278,9 +274,7 @@ class _SuccessLayoutState extends State<_SuccessLayout>
               child: LayoutBuilder(
                 builder: (context, constraints) => SingleChildScrollView(
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
-                    ),
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
                     child: Center(child: content),
                   ),
                 ),
@@ -686,10 +680,7 @@ class RiskNoteBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-      ),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -780,7 +771,9 @@ class _IngredientTableSheet extends StatelessWidget {
             badKeys: product.badIngredients,
             goodKeys: product.goodIngredients,
           );
-    final badCount = entries.where((e) => e.mark == IngredientMark.bad).length;
+    final badCount = entries
+        .where((e) => e.mark == IngredientMark.bad)
+        .length;
     final maxHeight = MediaQuery.sizeOf(context).height * 0.82;
     final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
 
