@@ -148,7 +148,8 @@ def candidate_query(*, id=None, ids=None, source=None, source_ref=None):
 # 동일 기준. 단일 홉만 훑는다(자식의 자식은 비대상).
 MERGED_CHILDREN_LOCK = """
     select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', ''),
-           coalesce(raw->>'original_name', name)
+           -- 키가 있으면 null 이어도 그대로(원래 이름이 없던 자식이 부모 이름 속 용량을 쓰지 않게)
+           case when raw ? 'original_name' then raw->>'original_name' else name end
     from collected_products
     where (raw->>'merged_into') = any(%s)
       and (raw->>'deleted_at') is null

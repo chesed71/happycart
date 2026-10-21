@@ -645,6 +645,18 @@ def test_merged_child_size_from_name_or_hold():
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
+        # 1c) 원래 이름이 null 로 보관된 자식은 부모 이름(용량 포함)에서 뽑지 않고 보류
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent 120g")
+        child = _merged_child(cur, parent, SYN_BC_2)
+        cur.execute("""update collected_products set size=null, name='N-parent 120g',
+                         raw = raw || '{"original_name": null}' where id=%s""", (child,))
+        stats = Counter()
+        run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
+        check("원래 이름 null 이면 보류", stats["held_child_no_size"] == 1, f'got {stats["held_child_no_size"]}')
+        conn.rollback()
+
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
         # 2) 못 뽑으면 그룹 보류, 사람이 용량을 넣으면 승격
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-childsize2")
         child = _merged_child(cur, parent, SYN_BC_2)
