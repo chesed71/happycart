@@ -24,7 +24,7 @@ import argparse
 import re
 from collections import Counter
 
-from common import connect, id_list_arg
+from common import COUNT_RE, SIZE_RE, connect, id_list_arg
 
 # 검토 필요(flagged)와 종료 판정(missing_*) 태그 — 후보 쿼리와 머지 자식 보류 판정이 같은
 # 집합을 쓴다(데이터데스크 레인 설계 2026-10-08)
@@ -147,7 +147,7 @@ def candidate_query(*, id=None, ids=None, source=None, source_ref=None):
 # rejected(자격 박탈)·promoted(이미 승격)·삭제 자식은 제외 — attach RPC 의 머지 대상 탐색 필터와
 # 동일 기준. 단일 홉만 훑는다(자식의 자식은 비대상).
 MERGED_CHILDREN_LOCK = """
-    select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', '')
+    select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', ''), name
     from collected_products
     where (raw->>'merged_into') = any(%s)
       and (raw->>'deleted_at') is null
@@ -155,6 +155,20 @@ MERGED_CHILDREN_LOCK = """
     order by id   -- 교착 회피: 항상 같은 순서로 잠근다
     for update
 """
+
+
+def size_from_name(name: str | None) -> str | None:
+    """상품명 토큰에서 용량을 뽑는다("바다마을 날치알 180g" → "180g", "54g 4개" → "54g × 4개").
+    용량 토큰이 없으면 None — 개수만 있는 "2개입" 은 용량을 알 수 없어 None."""
+    size = count = None
+    for tok in re.split(r"[\s,()\[\]/]+", name or ""):
+        if size is None and SIZE_RE.fullmatch(tok):
+            size = tok
+        elif count is None and COUNT_RE.fullmatch(tok):
+            count = tok
+    if size and count:
+        return f"{size} × {count}"
+    return size
 
 
 # 승격 실행끼리 직렬화하는 트랜잭션 advisory lock 키(고정값, 다른 advisory lock 사용처와 겹치지 않음).
@@ -279,6 +293,24 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             stats["held_flagged_child"] += len(members)
             continue
 
+        # 용량이 빈 머지 자식은 자식 상품명에서 뽑아 쓴다. 못 뽑으면 그룹째 보류한다 —
+        # product_barcodes.size 는 NOT NULL 이라 그대로 넣으면 승격 전체가 실패하고, 자식만 빼면
+        # 위 태그 보류와 같은 이유로 되살릴 수 없게 된다. 데스크에서 자식 용량을 넣으면 풀린다.
+        child_sizes = {}
+        no_size = []
+        for c in children:
+            if c[1] is None or c[2]:
+                continue
+            guessed = size_from_name(c[5])
+            if guessed:
+                child_sizes[c[0]] = guessed
+            else:
+                no_size.append(c[1])
+        if no_size:
+            print(f"  -> HOLD: 합쳐진 바코드 용량 없음: {', '.join(no_size)}")
+            stats["held_child_no_size"] += len(members)
+            continue
+
         if dry_run:
             # 미리보기 — 머지 자식 바코드까지 세어 실측(부모+자식)에 근접시킨다.
             # 충돌/중복은 예측 불가라 실제 붙는 바코드 수의 상한 근사다.
@@ -325,7 +357,7 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             # 위에서 잠근 children 에서 이 멤버의 자식만 고른다 — 다시 조회하면 잠금 이후 바뀐
             # 값을 볼 수 있어(판정과 승격이 어긋남) 같은 집합을 그대로 쓴다.
             targets = [(m[0], m[7], m[5])]  # (id, barcode, size)
-            targets.extend((c[0], c[1], c[2]) for c in children
+            targets.extend((c[0], c[1], c[2] or child_sizes.get(c[0])) for c in children
                            if c[3] == str(m[0]) and c[1] is not None)
             # targets[0] = 멤버(부모) 자신, 이후는 머지 자식. 부모 바코드가 이 master 에
             # 못 붙으면(다른 master 충돌) 자식도 붙이지 않는다 — 부모 없이 자식만 달린
@@ -364,9 +396,9 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
                 cur.execute("""
                     update collected_products
                     set stage = 'promoted', promoted_master_id = %s, promoted_at = now(),
-                        prod_master_id = null
+                        prod_master_id = null, size = coalesce(size, %s)
                     where id = %s
-                """, (master_id, tid))
+                """, (master_id, tsize, tid))
 
         # 이 그룹의 어떤 바코드도 master 에 붙지 못했다면(전부 충돌) 빈 master 정리.
         if attached == 0 and got:
