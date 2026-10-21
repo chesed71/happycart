@@ -652,6 +652,37 @@ def test_merged_child_size_from_name_or_hold():
         conn.rollback()
 
 
+def test_size_from_name():
+    """자식 용량 추출 — 천 단위 쉼표는 붙여 읽고, 용량이 여럿이거나 없으면 None(사람이 입력)."""
+    from promote import size_from_name
+    cases = {
+        "바다마을 날치알 골드 180g": "180g",
+        "칸쵸 54g, 4개": None,
+        "오리지널 휘파람 캔디 22gx20개 (1통)": "22g × 20개",
+        "레인보우 37.5g×24개": "37.5g × 24개",
+        "허니버터칩 44g x 3": "44g × 3",
+        "마리오 비스킷 540g(1박스- 10팩)": None,
+        "해태 맛동산 210g (70g x 3번들)": None,
+        "찹쌀 라티오 30gx30개 (1팩)": "30g × 30개",
+        "그라쉐 미니벨 초콜릿 28gx20개 (1박스-4통)": None,
+        "28gx20개x4통": None,
+        "28g×20개×4통": None,
+        "44g x 3 x 4": None,
+        "버블 껌 포도향 55gx (1통)": "55g",
+        "밀가루 1,000g": "1000g",
+        "단백질 20g 프로틴 음료 250ml": None,
+        "프로틴 음료 단백질 20g (250 ml)": None,
+        "프로틴바 단백질 20g 함유 (50g×12개)": None,
+        "우유 0.5L": "0.5L",
+        "x 1,0000g": None,
+        "바다마을 날치알 골드 2개입": None,
+        None: None,
+    }
+    for name, want in cases.items():
+        got = size_from_name(name)
+        check(f"size_from_name({name!r})", got == want, f"got {got!r}")
+
+
 def test_promote_clears_prod_master_id():
     """승격하면 옛 prod_master_id(운영 연결)가 비워진다 — 새 승격 내용은 다시 업로드해야 한다."""
     from collections import Counter
@@ -1370,7 +1401,7 @@ def test_judge_write_guard():
 def main():
     for t in [test_testdb_guard, test_bootstrap_guard, test_rpc_invariants, test_promoted_lock, test_bad_inputs,
               test_least_privilege, test_for_update_race, test_promote_locks_during_review,
-              test_merged_child_size_from_name_or_hold,
+              test_merged_child_size_from_name_or_hold, test_size_from_name,
               test_candidate_query_unscoped_equals_constant,
               test_promote_scoped_lock_allows_other_review,
               test_promote_runs_serialize_on_advisory_lock,

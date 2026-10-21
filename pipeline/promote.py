@@ -24,7 +24,7 @@ import argparse
 import re
 from collections import Counter
 
-from common import COUNT_RE, SIZE_RE, connect, id_list_arg
+from common import COUNT_RE, connect, id_list_arg
 
 # 검토 필요(flagged)와 종료 판정(missing_*) 태그 — 후보 쿼리와 머지 자식 보류 판정이 같은
 # 집합을 쓴다(데이터데스크 레인 설계 2026-10-08)
@@ -157,18 +157,41 @@ MERGED_CHILDREN_LOCK = """
 """
 
 
+# 이름 속 용량(+바로 붙은 곱셈 포장 "22gx20개"·"37.5g×24개"·"44g x 3"). 단위 뒤 영문자는 곱셈 x 만 허용.
+SIZE_ANYWHERE_RE = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*(kg|g|ml|l|L|G|ML|KG)(?!(?![xX])[A-Za-z])"
+    r"(?:\s*[xX×*]\s*(\d+)\s*(개|입|봉|팩|병|캔|매|스틱)?)?"
+)
+
+
 def size_from_name(name: str | None) -> str | None:
-    """상품명 토큰에서 용량을 뽑는다("바다마을 날치알 180g" → "180g", "54g 4개" → "54g × 4개").
-    용량 토큰이 없으면 None — 개수만 있는 "2개입" 은 용량을 알 수 없어 None."""
-    size = count = None
-    for tok in re.split(r"[\s,()\[\]/]+", name or ""):
-        if size is None and SIZE_RE.fullmatch(tok):
-            size = tok
-        elif count is None and COUNT_RE.fullmatch(tok):
-            count = tok
-    if size and count:
-        return f"{size} × {count}"
-    return size
+    """머지 자식 상품명에서 용량을 뽑는다("바다마을 날치알 180g" → "180g", "22gx20개" → "22g × 20개").
+    확실할 때만 돌려준다. 다음은 None(그룹 보류 → 사람이 입력):
+      - 용량이 없음("2개입")
+      - 서로 다른 용량이 둘 이상("단백질 20g (250 ml)", "210g (70g x 3번들)")
+      - 용량과 떨어진 개수("54g, 4개", "540g(1박스- 10팩)", "(1박스-4통)") — 총량인지 낱개인지
+        알 수 없다. "(1통)"처럼 1 은 무시.
+    """
+    # 천 단위 쉼표("1,000g")는 구분자가 아니다.
+    text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", name or "")
+    sizes = set()
+    for m in SIZE_ANYWHERE_RE.finditer(text):
+        if re.match(r"0\d", m.group(1)):  # "000g" 같은 잘린 숫자 제외
+            continue
+        size = f"{m.group(1)}{m.group(2)}"
+        if m.group(3):
+            size += f" × {m.group(3)}{m.group(4) or ''}"
+        sizes.add(size)
+    if len(sizes) != 1:
+        return None
+    rest = SIZE_ANYWHERE_RE.sub(" ", text)
+    # 연속 곱셈("28gx20개x4통")은 한 단계만 읽혔으니 남은 배수가 있으면 보류.
+    if re.search(r"[xX×*]\s*\d", rest):
+        return None
+    if any((COUNT_RE.fullmatch(t) or re.fullmatch(r"\d+(통|박스)", t)) and not re.match(r"1\D", t)
+           for t in re.split(r"[\s,()\[\]/\-]+", rest)):
+        return None
+    return sizes.pop()
 
 
 # 승격 실행끼리 직렬화하는 트랜잭션 advisory lock 키(고정값, 다른 advisory lock 사용처와 겹치지 않음).
