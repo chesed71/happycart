@@ -636,7 +636,8 @@ def test_merged_child_size_from_name_or_hold():
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-childsize-orig")
         child = _merged_child(cur, parent, SYN_BC_2)
         cur.execute("""update collected_products set size=null, name='N-parent-childsize-orig',
-                         raw = raw || '{"original_name": "바다마을 날치알 180g"}' where id=%s""", (child,))
+                         raw = raw || '{"original_name": "바다마을 날치알 180g",
+                                        "synced_name": "N-parent-childsize-orig"}' where id=%s""", (child,))
         run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
         cur.execute("select stage, size from collected_products where id=%s", (child,))
         got = cur.fetchone()
@@ -649,10 +650,25 @@ def test_merged_child_size_from_name_or_hold():
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent 120g")
         child = _merged_child(cur, parent, SYN_BC_2)
         cur.execute("""update collected_products set size=null, name='N-parent 120g',
-                         raw = raw || '{"original_name": null}' where id=%s""", (child,))
+                         raw = raw || '{"original_name": null, "synced_name": "N-parent 120g"}'
+                       where id=%s""", (child,))
         stats = Counter()
         run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
         check("원래 이름 null 이면 보류", stats["held_child_no_size"] == 1, f'got {stats["held_child_no_size"]}')
+        conn.rollback()
+
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
+        # 1d) 맞춘 뒤 이름을 고친 자식(name ≠ synced_name)은 옛 보관 이름이 아니라 현재 이름에서 뽑는다
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-edited")
+        child = _merged_child(cur, parent, SYN_BC_2)
+        cur.execute("""update collected_products set size=null, name='고친 이름 185g',
+                         raw = raw || '{"original_name": "옛 이름 180g", "synced_name": "N-parent-edited"}'
+                       where id=%s""", (child,))
+        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
+        cur.execute("select size from collected_products where id=%s", (child,))
+        got = cur.fetchone()[0]
+        check("고친 자식은 현재 이름에서 용량", got == "185g", f"got {got}")
         conn.rollback()
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
@@ -917,6 +933,8 @@ def test_upsert_preserves_desk_raw_keys():
                         'text', null, 'confidence', null, 'status', 'unreadable'),
                       'deleted_at', '2026-10-06 00:00:00', 'manual', true,
                       'detail_source_ref', '9355738365',
+                      'original_name', '맞추기 전 이름 180g', 'original_brand', null,
+                      'synced_name', '부모 이름',
                       'category_folder', '옛폴더'),
                     'B', 'N', '10g', 'cat', null, null, null, 'parsed')
             returning id
@@ -932,12 +950,16 @@ def test_upsert_preserves_desk_raw_keys():
         cur.execute(
             """select raw->>'review_tag', raw->>'merged_into', raw->'merged_barcodes'->>0,
                       raw->'ingredients_draft', raw->>'deleted_at', raw->>'manual',
-                      raw->>'detail_source_ref', raw->>'category_folder', brand, category
+                      raw->>'detail_source_ref', raw->>'category_folder', brand, category,
+                      raw->>'original_name', raw ? 'original_brand', raw->>'synced_name'
                  from collected_products where id=%s""",
             (rid,),
         )
         (tag, merged, mbc, draft, deleted, manual, dsr,
-         folder, brand, category) = cur.fetchone()
+         folder, brand, category, orig_name, has_orig_brand, synced) = cur.fetchone()
+        check("재추출이 자식 맞추기 보관 키를 보존",
+              orig_name == "맞추기 전 이름 180g" and has_orig_brand and synced == "부모 이름",
+              f"got {orig_name}/{has_orig_brand}/{synced}")
         check("재추출이 review_tag 를 보존", tag == "flagged", f"got {tag}")
         check("재추출이 merged_into 를 보존",
               merged == "00000000-0000-0000-0000-000000000001", f"got {merged}")
