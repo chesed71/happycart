@@ -38,7 +38,7 @@ product_barcodes.image_url 에 되쓴다. (Storage 업로드는 SUPABASE_URL + S
 직렬화한다. 이미 다른 업로더가 잡고 있으면 아무것도 쓰기 전에 멈춘다. 영수증 경로마다 잠금 순서를 맞추는
 대신 두 업로더가 동시에 쓰지 못하게 하는 것이다(error 영수증 직전 행 재확인은 이중 방어로 남긴다).
 
-배포 순서: ① 운영 Supabase 에 0021 마이그레이션 → ② LOCAL 에 pipeline/sql/upload_receipts.sql DDL →
+배포 순서: ① 운영 Supabase 에 0021·0024 마이그레이션 → ② LOCAL 에 pipeline/sql/upload_receipts.sql DDL →
 ③ 이 코드. 실행 시(dry-run 제외) 이미지 업로드·RPC 호출 전에 LOCAL 에 upload_receipts 가 있는지, 운영
 upload_promoted_product_version() 이 21 인지, add_barcode_to_master_version() 이 24 인지(0024 먼저 적용)
 확인하고 아니면 아무것도 쓰지 않고 멈춘다. 이중 방어로 RPC 가
