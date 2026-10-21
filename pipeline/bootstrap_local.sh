@@ -46,10 +46,10 @@ psql_db < "$REPO_ROOT/supabase/local/00_compat.sql"
 for f in "$REPO_ROOT"/supabase/migrations/*.sql; do
   base="$(basename "$f")"
   # 0011: storage 스키마 없음 (단독 postgres). 0015 split·0016 upload RPC·0017 lookup·0018 save RPC·0019 master_key·
-  # 0020 RPC 가드·0021 RPC 기존 master 불변·0022: 아래에서 별도 적용 (0016·0019·0020이 0015의 product_masters에 의존).
+  # 0020 RPC 가드·0021 RPC 기존 master 불변·0022·0024: 아래에서 별도 적용 (0016·0019·0020이 0015의 product_masters에 의존).
   # 0021·0022는 0020 뒤에 적용해야 한다 — 순회에서 먼저 적용되면 뒤의 0020이 RPC를 구버전으로 덮는다.
   # 0014(insufficient 제거)는 products 스키마 변경이라 이 루프에서 정상 적용된다.
-  if [[ "$base" =~ ^(0011|0015|0016|0017|0018|0019|0020|0021|0022)_ ]]; then
+  if [[ "$base" =~ ^(0011|0015|0016|0017|0018|0019|0020|0021|0022|0024)_ ]]; then
     continue
   fi
   echo "    $base"
@@ -84,6 +84,9 @@ psql_db < "$REPO_ROOT"/supabase/migrations/0021_*.sql
 
 echo "==> 0022 approve_service_products (0015 product_masters 의존이라 0021 뒤)"
 psql_db < "$REPO_ROOT"/supabase/migrations/0022_*.sql
+
+echo "==> 0024 add_barcode_to_master (0015 product_masters 의존이라 0022 뒤)"
+psql_db < "$REPO_ROOT"/supabase/migrations/0024_*.sql
 
 echo "==> collected_products (local-only)"
 psql_db < "$REPO_ROOT/pipeline/sql/collected_products.sql"
