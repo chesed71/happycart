@@ -632,6 +632,19 @@ def test_merged_child_size_from_name_or_hold():
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
+        # 1b) 자식 이름이 부모를 따라 바뀐 뒤에도 원래 이름(raw.original_name)에서 뽑는다
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-childsize-orig")
+        child = _merged_child(cur, parent, SYN_BC_2)
+        cur.execute("""update collected_products set size=null, name='N-parent-childsize-orig',
+                         raw = raw || '{"original_name": "바다마을 날치알 180g"}' where id=%s""", (child,))
+        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
+        cur.execute("select stage, size from collected_products where id=%s", (child,))
+        got = cur.fetchone()
+        check("원래 이름에서 뽑은 용량으로 자식 승격", got == ("promoted", "180g"), f"got {got}")
+        conn.rollback()
+
+    with connect_test(source_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("begin")
         # 2) 못 뽑으면 그룹 보류, 사람이 용량을 넣으면 승격
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-childsize2")
         child = _merged_child(cur, parent, SYN_BC_2)
