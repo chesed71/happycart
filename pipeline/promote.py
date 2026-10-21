@@ -147,7 +147,9 @@ def candidate_query(*, id=None, ids=None, source=None, source_ref=None):
 # rejected(자격 박탈)·promoted(이미 승격)·삭제 자식은 제외 — attach RPC 의 머지 대상 탐색 필터와
 # 동일 기준. 단일 홉만 훑는다(자식의 자식은 비대상).
 MERGED_CHILDREN_LOCK = """
-    select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', ''), name
+    select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', ''),
+           -- 키가 있으면 null 이어도 그대로(원래 이름이 없던 자식이 부모 이름 속 용량을 쓰지 않게)
+           case when raw ? 'original_name' then raw->>'original_name' else name end
     from collected_products
     where (raw->>'merged_into') = any(%s)
       and (raw->>'deleted_at') is null
@@ -316,7 +318,8 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             stats["held_flagged_child"] += len(members)
             continue
 
-        # 용량이 빈 머지 자식은 자식 상품명에서 뽑아 쓴다. 못 뽑으면 그룹째 보류한다 —
+        # 용량이 빈 머지 자식은 자식 상품명에서 뽑아 쓴다. 자식 이름은 부모를 따르므로(데이터데스크
+        # 2026-10-21_child_name_follows_parent.sql) 머지 전 원래 이름(raw.original_name)을 먼저 본다. 못 뽑으면 그룹째 보류한다 —
         # product_barcodes.size 는 NOT NULL 이라 그대로 넣으면 승격 전체가 실패하고, 자식만 빼면
         # 위 태그 보류와 같은 이유로 되살릴 수 없게 된다. 데스크에서 자식 용량을 넣으면 풀린다.
         child_sizes = {}
