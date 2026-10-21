@@ -115,7 +115,9 @@ on conflict (source, source_ref) do update set
                   'ingredients_draft',  -- AI 원재료 초안
                   'deleted_at',         -- 소프트 삭제
                   'manual',             -- 수동 생성 변형 자식
-                  'detail_source_ref'   -- 부모 detail 참조
+                  'detail_source_ref',  -- 부모 detail 참조
+                  'original_name',      -- 자식 맞추기 전 처음 이름(기록용, 데이터데스크 sync_merged_children)
+                  'original_brand'      -- 자식 맞추기 전 처음 브랜드(기록용)
                 ])), '{}'::jsonb),
   brand = excluded.brand,
   name = excluded.name,

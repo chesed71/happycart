@@ -632,27 +632,30 @@ def test_merged_child_size_from_name_or_hold():
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # 1b) 자식 이름이 부모를 따라 바뀐 뒤에도 원래 이름(raw.original_name)에서 뽑는다
-        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-childsize-orig")
+        # 1b) 부모 이름으로 맞춘 적이 있는 자식(original_name 기록)은 이름에 용량이 있어도 뽑지 않고 보류.
+        # 맞춘 뒤 부모 이름이 바뀌면 자식 이름은 옛 부모 이름이라, 부모와 다르다는 것만으로 출처를 알 수 없다.
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent 120g")
         child = _merged_child(cur, parent, SYN_BC_2)
-        cur.execute("""update collected_products set size=null, name='N-parent-childsize-orig',
+        cur.execute("""update collected_products set size=null, name='N-parent 120g',
                          raw = raw || '{"original_name": "바다마을 날치알 180g"}' where id=%s""", (child,))
-        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
-        cur.execute("select stage, size from collected_products where id=%s", (child,))
-        got = cur.fetchone()
-        check("원래 이름에서 뽑은 용량으로 자식 승격", got == ("promoted", "180g"), f"got {got}")
+        stats = Counter()
+        run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
+        check("맞춘 적 있는 자식은 보류", stats["held_child_no_size"] == 1,
+              f'got {stats["held_child_no_size"]}')
         conn.rollback()
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # 1c) 원래 이름이 null 로 보관된 자식은 부모 이름(용량 포함)에서 뽑지 않고 보류
-        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent 120g")
+        # 1d) 맞춘 뒤 부모 이름이 바뀌어 이름이 달라진 자식도 보류(옛 부모 이름 속 용량을 쓰지 않음)
+        parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-edited")
         child = _merged_child(cur, parent, SYN_BC_2)
-        cur.execute("""update collected_products set size=null, name='N-parent 120g',
-                         raw = raw || '{"original_name": null}' where id=%s""", (child,))
+        cur.execute("""update collected_products set size=null, name='옛 부모 이름 120g',
+                         raw = raw || '{"original_name": "옛 이름 180g"}'
+                       where id=%s""", (child,))
         stats = Counter()
         run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
-        check("원래 이름 null 이면 보류", stats["held_child_no_size"] == 1, f'got {stats["held_child_no_size"]}')
+        check("부모 이름이 바뀐 맞춘 자식도 보류", stats["held_child_no_size"] == 1,
+              f'got {stats["held_child_no_size"]}')
         conn.rollback()
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
@@ -917,6 +920,7 @@ def test_upsert_preserves_desk_raw_keys():
                         'text', null, 'confidence', null, 'status', 'unreadable'),
                       'deleted_at', '2026-10-06 00:00:00', 'manual', true,
                       'detail_source_ref', '9355738365',
+                      'original_name', '맞추기 전 이름 180g', 'original_brand', null,
                       'category_folder', '옛폴더'),
                     'B', 'N', '10g', 'cat', null, null, null, 'parsed')
             returning id
@@ -932,12 +936,16 @@ def test_upsert_preserves_desk_raw_keys():
         cur.execute(
             """select raw->>'review_tag', raw->>'merged_into', raw->'merged_barcodes'->>0,
                       raw->'ingredients_draft', raw->>'deleted_at', raw->>'manual',
-                      raw->>'detail_source_ref', raw->>'category_folder', brand, category
+                      raw->>'detail_source_ref', raw->>'category_folder', brand, category,
+                      raw->>'original_name', raw ? 'original_brand'
                  from collected_products where id=%s""",
             (rid,),
         )
         (tag, merged, mbc, draft, deleted, manual, dsr,
-         folder, brand, category) = cur.fetchone()
+         folder, brand, category, orig_name, has_orig_brand) = cur.fetchone()
+        check("재추출이 자식 맞추기 기록 키를 보존",
+              orig_name == "맞추기 전 이름 180g" and has_orig_brand,
+              f"got {orig_name}/{has_orig_brand}")
         check("재추출이 review_tag 를 보존", tag == "flagged", f"got {tag}")
         check("재추출이 merged_into 를 보존",
               merged == "00000000-0000-0000-0000-000000000001", f"got {merged}")
