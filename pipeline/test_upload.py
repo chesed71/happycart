@@ -1393,6 +1393,9 @@ class _FakeTarget:
     def rpc_version(self):
         return self.version
 
+    def add_barcode_version(self):
+        return 24
+
     def upload(self, master, barcodes):
         self.calls.append(master["name"])
         return {"master_id": "33333333-3333-3333-3333-333333333333", "master_status": self.status,

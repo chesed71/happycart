@@ -15,7 +15,7 @@
 영수증: master 하나의 RPC 가 끝나면 LOCAL 트랜잭션 하나로 바코드(행)마다 upload_receipts 에 결과를
 남기고, 운영에 실제로 붙은 행(inserted·existing·exists)에만 collected_products.prod_master_id 를
 기록해 커밋한다. 업로드가 읽은 승격 세대(promoted_at)·바코드가 그대로일 때만 기록한다. RPC 가
-실패하면 그 master 의 행마다 error 영수증을 남기고 다음 master 로 넘어간다. 중간에 멈춰도 다음
+실패하면 그 master 의 미연결 행마다 error 영수증을 남기고(행을 잠가 세대·바코드·미연결을 재확인한 뒤) 다음 master 로 넘어간다. 중간에 멈춰도 다음
 기본 실행이 미연결분만 다시 보내고, RPC(0021)가 이미 된 연결을 exists 로 돌려줘 기록이 채워진다.
 
 이미지: image_url 이 비어있는 승격 바코드는 prepare_images.py 가 정리한 JPEG(manifest 의
@@ -26,9 +26,22 @@ master 소속이고 image_url 이 비어 있으며 그 승격 행이 읽은 세�
 product_barcodes.image_url 에 되쓴다. (Storage 업로드는 SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 필요 — 없으면 image 단계만 건너뛴다.)
 
-배포 순서: ① 운영 Supabase 에 0021 마이그레이션 → ② LOCAL 에 pipeline/sql/upload_receipts.sql DDL →
+같은 상품의 다른 바코드(형제 바코드): 고른 master 의 승격 행에 이미 기록된 prod_master_id 를 모아
+  - 0개: 위처럼 upload_promoted_product(0021)를 부른다.
+  - 정확히 1개: 그 운영 master 에 아직 연결 안 된(prod_master_id 가 빈) 바코드만 add_barcode_to_master(0024)로
+    한 번 붙인다. 기대 identity 는 LOCAL master 의 master_key·ingredients_hash. master 내용은 보내지 않는다.
+  - 2개 이상: 매핑이 갈라진 것이므로 부르지 않고 미연결 행마다 error 영수증을 남긴다.
+  두 RPC 모두 바코드를 바코드 순서로 정렬해 보낸다 — 서로 다른 master 에 대한 두 호출이 같은 새 바코드를
+  엇갈린 순서로 넣다가 교착하지 않게(0024 도 안에서 바코드 순서로 넣는다).
+
+업로더는 한 번에 하나: dry-run 이 아니면 실행 전체를 LOCAL 세션 advisory lock(키 'upload_prod') 하나로
+직렬화한다. 이미 다른 업로더가 잡고 있으면 아무것도 쓰기 전에 멈춘다. 영수증 경로마다 잠금 순서를 맞추는
+대신 두 업로더가 동시에 쓰지 못하게 하는 것이다(error 영수증 직전 행 재확인은 이중 방어로 남긴다).
+
+배포 순서: ① 운영 Supabase 에 0021·0024 마이그레이션 → ② LOCAL 에 pipeline/sql/upload_receipts.sql DDL →
 ③ 이 코드. 실행 시(dry-run 제외) 이미지 업로드·RPC 호출 전에 LOCAL 에 upload_receipts 가 있는지, 운영
-upload_promoted_product_version() 이 21 인지 확인하고 아니면 아무것도 쓰지 않고 멈춘다. 이중 방어로 RPC 가
+upload_promoted_product_version() 이 21 인지, add_barcode_to_master_version() 이 24 인지(0024 먼저 적용)
+확인하고 아니면 아무것도 쓰지 않고 멈춘다. 이중 방어로 RPC 가
 0021 밖의 master 결과(예: 0020 의 updated)를 돌려주면 그 master 의 LOCAL 기록 전에 멈춘다.
 
 백엔드 2종 (둘 다 같은 RPC 호출):
@@ -93,7 +106,7 @@ def _jsonable(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
 
-def fetch_promoted(src, *, ids=None, all_=False):
+def fetch_promoted(src, *, ids=None, all_=False, with_rows=False):
     """승격된 master(중복 제거) + master별 barcode 목록 + 건너뛴 id 목록.
 
     범위(master id 집합을 먼저 SQL로 정한다):
@@ -101,13 +114,16 @@ def fetch_promoted(src, *, ids=None, all_=False):
       - all_: 모든 승격 master
       - 기본: stage='promoted' 이고 prod_master_id 가 NULL 인 행이 하나라도 있는 master
     고른 master 는 이미 연결된 형제 행을 포함해 모든 승격 행의 바코드를 돌려준다.
-    skipped: ids 중 승격이 아니거나 없는 id (문자열)."""
+    skipped: ids 중 승격이 아니거나 없는 id (문자열).
+    with_rows=True 면 네 번째 값으로 master 별 모든 승격 행 [{collected_id, barcode, promoted_at, prod_master_id,
+    linked}] 을 함께 돌려준다. 바코드 항목과 이 목록은 한 번의 LEFT JOIN 조회에서 나오므로, LOCAL 바코드
+    링크 유무(linked)와 prod_master_id 집계가 같은 시점의 값이다."""
     skipped: list = []
     with src.cursor() as cur:
         if ids is not None:
             ids = [str(i) for i in ids]
             if not ids:
-                return {}, {}, []
+                return ({}, {}, [], {}) if with_rows else ({}, {}, [])
             cur.execute("""
                 select id::text, promoted_master_id from collected_products
                 where id = any(%s::uuid[]) and stage = 'promoted' and promoted_master_id is not null
@@ -123,7 +139,7 @@ def fetch_promoted(src, *, ids=None, all_=False):
             """)
             master_ids = [r[0] for r in cur.fetchall()]
         if not master_ids:
-            return {}, {}, skipped
+            return ({}, {}, skipped, {}) if with_rows else ({}, {}, skipped)
         cur.execute(f"""
             select distinct m.id, {', '.join('m.' + c for c in MASTER_COLS)}
             from product_masters m
@@ -133,20 +149,28 @@ def fetch_promoted(src, *, ids=None, all_=False):
         masters = {r[0]: dict(zip(MASTER_COLS, (_jsonable(x) for x in r[1:]))) for r in cur.fetchall()}
         # collected row 식별자(id)를 함께 들고 온다 — writeback을 행 단위로 좁히기 위해.
         # barcode가 collected_products에서 유니크하지 않으므로 (b.master_id =
-        # c.promoted_master_id)까지 묶어 그 행의 바코드만 매칭한다.
+        # c.promoted_master_id)까지 묶어 그 행의 바코드만 매칭한다. LEFT JOIN 이라 LOCAL 바코드 링크가 없는
+        # 승격 행도 함께 나온다(linked=false) — 바코드 항목에는 넣지 않는다.
         cur.execute("""
             select c.promoted_master_id, c.id, c.barcode, b.size, b.image_url, b.image_source_url,
-                   c.promoted_at
+                   c.promoted_at, c.prod_master_id, b.barcode is not null
             from collected_products c
-            join product_barcodes b
+            left join product_barcodes b
               on b.barcode = c.barcode and b.master_id = c.promoted_master_id
             where c.stage = 'promoted' and c.promoted_master_id = any(%s)
         """, (master_ids,))
         bc_by_master: dict = {}
-        for mid, cid, barcode, size, iu, isu, pat in cur.fetchall():
-            bc_by_master.setdefault(mid, []).append(
-                {"collected_id": cid, "barcode": barcode, "size": size,
-                 "image_url": iu, "image_source_url": isu, "promoted_at": pat})
+        rows_by_master: dict = {}
+        for mid, cid, barcode, size, iu, isu, pat, pmid, linked in cur.fetchall():
+            rows_by_master.setdefault(mid, []).append(
+                {"collected_id": cid, "barcode": barcode, "promoted_at": pat, "prod_master_id": pmid,
+                 "linked": linked})
+            if linked:
+                bc_by_master.setdefault(mid, []).append(
+                    {"collected_id": cid, "barcode": barcode, "size": size,
+                     "image_url": iu, "image_source_url": isu, "promoted_at": pat, "prod_master_id": pmid})
+    if with_rows:
+        return masters, bc_by_master, skipped, rows_by_master
     return masters, bc_by_master, skipped
 
 
@@ -200,9 +224,28 @@ class RestTarget:
                 return None
             raise
 
+    def add_barcode_version(self):
+        """운영 add_barcode_to_master_version() 값. 함수가 없으면(404·PGRST202) None — 0024 미적용."""
+        try:
+            return self._req("POST", "/rpc/add_barcode_to_master_version", {})
+        except RuntimeError as ex:
+            if " → 404 " in str(ex) or "PGRST202" in str(ex):
+                return None
+            raise
+
+    def master_identity(self, master_id):
+        """운영 master 의 (verified_status, master_key, ingredients_hash). 없으면 None (dry-run 용)."""
+        rows = self._req("GET", f"/product_masters?id=eq.{master_id}"
+                                "&select=verified_status,master_key,ingredients_hash")
+        return (rows[0]["verified_status"], rows[0]["master_key"], rows[0]["ingredients_hash"]) if rows else None
+
     def upload(self, master, barcodes):
         return self._req("POST", "/rpc/upload_promoted_product",
                          {"p_master": master, "p_barcodes": barcodes})
+
+    def add_barcodes(self, master_id, expected, barcodes):
+        return self._req("POST", "/rpc/add_barcode_to_master",
+                         {"p_master_id": str(master_id), "p_expected": expected, "p_barcodes": barcodes})
 
 
 # ── postgres 백엔드 (같은 RPC) ────────────────────────────────────────────────
@@ -241,6 +284,35 @@ class PgTarget:
             return None
         finally:
             self.conn.rollback()
+
+    def add_barcode_version(self):
+        """운영 add_barcode_to_master_version() 값. 함수가 없으면 None — 0024 미적용. 읽기만 하고 rollback."""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("select public.add_barcode_to_master_version()")
+                return cur.fetchone()[0]
+        except psycopg.errors.UndefinedFunction:
+            return None
+        finally:
+            self.conn.rollback()
+
+    def master_identity(self, master_id):
+        with self.conn.cursor() as cur:
+            cur.execute("select verified_status::text, master_key, ingredients_hash from product_masters "
+                        "where id=%s", (master_id,))
+            return cur.fetchone()
+
+    def add_barcodes(self, master_id, expected, barcodes):
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("select public.add_barcode_to_master(%s, %s::jsonb, %s::jsonb)",
+                            (master_id, json.dumps(expected), json.dumps(barcodes)))
+                res = cur.fetchone()[0]
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
+        return res
 
     def upload(self, master, barcodes):
         # 실패하면 rollback 해 연결을 실패 트랜잭션 상태로 남기지 않는다 — 남기면 뒤 master 가 모두 실패한다.
@@ -365,6 +437,9 @@ ATTACHED_RESULTS = ("inserted", "existing", "exists")
 RPC_VERSION = 21  # 운영 upload_promoted_product_version() 이 돌려줘야 하는 값(0021)
 # RPC 0021 이 돌려주는 master 결과 전부. 이 밖(예: 0020 의 updated)이면 운영 RPC 가 0021 이 아니다.
 RPC_MASTER_STATUSES = ("inserted", "existing", "review_held", "verified_held", "renamed_held", "empty_held")
+ADD_RPC_VERSION = 24  # 운영 add_barcode_to_master_version() 이 돌려줘야 하는 값(0024)
+# 0024 add_barcode_to_master 의 master 결과 전부.
+ADD_MASTER_STATUSES = ("existing", "review_held", "identity_mismatch", "not_found")
 
 
 def local_has_upload_receipts(src) -> bool:
@@ -398,14 +473,65 @@ def receipt_rows(local_id, entries, res):
     return out
 
 
+def insert_error_receipts(cur, run_id, local_id, items, error):
+    """미연결 행마다 error 영수증. 쓰기 직전에 그 행을 for update 로 잠그고, 읽은 세대(promoted_at)·바코드
+    그대로이고 아직 prod_master_id 가 비어 있을 때만 쓴다 — 그사이 다른 실행이 성공으로 연결한 행에 늦은
+    실패가 error 를 덮어 최신 영수증이 되지 않게(성공 기록의 writeback_attachments 재확인과 같은 조건).
+    반환: 쓴 행 수."""
+    written = 0
+    for e in items:
+        cur.execute("""select 1 from collected_products
+                       where id=%s and promoted_master_id=%s and stage='promoted'
+                         and promoted_at is not distinct from %s and barcode=%s and prod_master_id is null
+                       for update""", (e["collected_id"], local_id, e["promoted_at"], e["barcode"]))
+        if cur.fetchone() is None:
+            continue
+        insert_receipts(cur, run_id, [{"collected_id": e["collected_id"], "local_master_id": local_id,
+                                       "barcode": e["barcode"], "promoted_at": e["promoted_at"],
+                                       "result": "error", "prod_master_id": None}], error=error)
+        written += 1
+    return written
+
+
+def add_receipt_rows(local_id, entries, res):
+    """add_barcode_to_master(0024) 결과 → 영수증 행 목록(순수 함수). entries 는 보낸(미연결) 바코드 항목.
+    바코드 결과가 우선이다(master 가 보류여도): inserted → existing, exists → exists(둘 다 연결),
+    conflict → conflict. 응답에 없는 바코드는 master 결과로 적는다: review_held 는 그대로, identity_mismatch·
+    not_found 는 error(error 칸에 사유), existing 인데 없으면 error(missing_barcode_result).
+    upload_receipts 의 result CHECK 안의 값만 쓴다. prod_master_id 는 연결된 경우에만 채운다."""
+    bc_status = {}
+    for b in res.get("barcodes") or []:
+        bc_status.setdefault(b["barcode"], b["status"])  # 같은 바코드 중복 입력이면 첫 결과
+    m_status, m_id = res["master_status"], res.get("master_id")
+    out = []
+    for e in entries:
+        s, err = bc_status.get(e["barcode"]), None
+        if s == "inserted":
+            result = "existing"
+        elif s in ("exists", "conflict"):
+            result = s
+        elif m_status == "review_held":
+            result = "review_held"
+        elif m_status == "existing":
+            result, err = "error", "missing_barcode_result"
+        else:
+            result, err = "error", m_status
+        out.append({"collected_id": e["collected_id"], "local_master_id": local_id,
+                    "barcode": e["barcode"], "promoted_at": e["promoted_at"], "result": result,
+                    "prod_master_id": m_id if result in ("existing", "exists") and m_id else None,
+                    "error": err})
+    return out
+
+
 def insert_receipts(cur, run_id, rows, error=None):
+    """행에 error 가 있으면 그 값, 없으면 인자 error 를 error 칸에 쓴다."""
     for r in rows:
         cur.execute("""insert into upload_receipts
                          (run_id, collected_id, local_master_id, barcode, promoted_at, result,
                           prod_master_id, error)
                        values (%s, %s, %s, %s, %s, %s, %s, %s)""",
                     (run_id, r["collected_id"], r["local_master_id"], r["barcode"], r["promoted_at"],
-                     r["result"], r["prod_master_id"], error))
+                     r["result"], r["prod_master_id"], r.get("error") or error))
 
 
 def classify_dryrun(target, vals, barcodes):
@@ -446,8 +572,66 @@ def classify_dryrun(target, vals, barcodes):
     return {"master_id": existing_id, "master_status": m_status, "barcodes": bc_out}
 
 
-def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=None,
-               uploader=None, run_id=None):
+def classify_dryrun_add(target, prod_id, expected, barcodes):
+    """쓰기 없이 add_barcode_to_master(0024)가 어떻게 처리할지 분류 (운영 읽기만). RPC와 동일 분류."""
+    ident = target.master_identity(prod_id)
+    if ident is None:
+        return {"master_id": prod_id, "master_status": "not_found", "barcodes": []}
+    vstatus, key, ih = ident
+    if vstatus == "needs_review":
+        status = "review_held"
+    elif key != expected["master_key"] or ih != expected["ingredients_hash"]:
+        status = "identity_mismatch"
+    else:
+        status = "existing"
+    owners = {bc["barcode"]: target.barcode_owner(bc["barcode"]) for bc in barcodes}
+    if status != "existing":
+        kept = [{"barcode": bc["barcode"], "status": "exists"} for bc in barcodes
+                if str(owners[bc["barcode"]]) == str(prod_id)]
+        return {"master_id": prod_id, "master_status": status, "barcodes": kept}
+    bc_out, attached_here = [], set()
+    for bc in barcodes:
+        owner = owners[bc["barcode"]]
+        if bc["barcode"] in attached_here:
+            s = "inserted"  # 0024 는 같은 바코드 중복 입력에 첫 결과를 유지
+        elif owner is None:
+            s = "inserted"; attached_here.add(bc["barcode"])
+        elif str(owner) == str(prod_id):
+            s = "exists"
+        else:
+            s = "conflict"
+        bc_out.append({"barcode": bc["barcode"], "status": s})
+    return {"master_id": prod_id, "master_status": "existing", "barcodes": bc_out}
+
+
+UPLOAD_LOCK_SQL_KEY = "upload_prod"  # 업로더 실행 직렬화용 LOCAL 세션 advisory lock 키(hashtextextended)
+
+
+def run_upload(src, target, *, dry_run=False, **kw):
+    """업로더는 한 번에 하나 — dry-run 이 아니면 LOCAL 세션 advisory lock 을 잡고 _run_upload 를 돌린다.
+    이미 잡혀 있으면 아무것도 쓰기 전에 SystemExit. 끝나면(예외 포함) 잠금을 푼다."""
+    if dry_run:
+        return _run_upload(src, target, dry_run=True, **kw)
+    with src.cursor() as cur:
+        cur.execute("select pg_try_advisory_lock(hashtextextended(%s, 0))", (UPLOAD_LOCK_SQL_KEY,))
+        got = cur.fetchone()[0]
+    src.commit()
+    if not got:
+        raise SystemExit("다른 upload_prod 실행이 진행 중입니다(LOCAL advisory lock 'upload_prod') — 끝난 뒤 다시 실행")
+    try:
+        return _run_upload(src, target, dry_run=False, **kw)
+    finally:
+        try:
+            src.rollback()
+            with src.cursor() as cur:
+                cur.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", (UPLOAD_LOCK_SQL_KEY,))
+            src.commit()
+        except psycopg.Error:
+            pass  # 연결이 끊겼으면 세션 잠금도 함께 풀린다
+
+
+def _run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=None,
+                uploader=None, run_id=None):
     """승격분을 운영에 올리고 집계(Counter)를 돌려준다.
 
     master 하나의 RPC 가 끝나면 바로 LOCAL 트랜잭션 하나로 영수증·연결 기록(prod_master_id)·
@@ -468,8 +652,12 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
         if version != RPC_VERSION:
             raise SystemExit(f"운영 RPC가 0021이 아닙니다 — 0021 먼저 적용"
                              f" (upload_promoted_product_version={version!r})")
+        add_version = target.add_barcode_version()
+        if add_version != ADD_RPC_VERSION:
+            raise SystemExit(f"운영에 add_barcode_to_master 0024가 없습니다 — 0024 먼저 적용"
+                             f" (add_barcode_to_master_version={add_version!r})")
 
-    masters, bc_by_master, skipped = fetch_promoted(src, ids=ids, all_=all_)
+    masters, bc_by_master, skipped, all_rows = fetch_promoted(src, ids=ids, all_=all_, with_rows=True)
     stats["skipped_ids"] = len(skipped)
     if skipped:
         print(f"건너뜀(승격 아님/없음) {len(skipped)}건: {', '.join(skipped[:5])}"
@@ -484,11 +672,63 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
     # 않았으므로 기록하지 않는다(=미매핑, 영수증에 사유가 남는다).
     for local_id, vals in masters.items():
         entries = bc_by_master.get(local_id, [])
+        rows_all = all_rows.get(local_id, [])
+        prod_ids = sorted({str(r["prod_master_id"]) for r in rows_all if r["prod_master_id"]})
+        missing = [r for r in rows_all if not r["linked"]]
+        hold_err = None
+        if missing:
+            # 승격 행인데 LOCAL 바코드 링크가 없음 — 그 행의 바코드·운영 매핑을 믿을 수 없어 부르지 않는다.
+            print(f"  LINK-MISSING ({vals['brand']} / {vals['name']}) — LOCAL 바코드 링크 없는 승격 행"
+                  f" {len(missing)}건, 호출 안 함")
+            stats["master_link_missing_error"] += 1
+            hold_err = "local_barcode_link_missing"
+        elif len(prod_ids) > 1:
+            # 한 LOCAL master 가 운영 master 여럿에 매핑됨 — 어느 쪽에 붙일지 모르므로 부르지 않는다.
+            print(f"  SPLIT ({vals['brand']} / {vals['name']}) — prod_master_id {len(prod_ids)}개, 호출 안 함")
+            stats["master_split_error"] += 1
+            hold_err = "multiple_prod_master_ids: " + ",".join(prod_ids)
+        if hold_err:
+            if dry_run:
+                continue
+            with src.cursor() as cur:
+                insert_error_receipts(cur, run_id, local_id, [r for r in rows_all if not r["prod_master_id"]],
+                                      hold_err)
+            src.commit()
+            continue
+        add_to = prod_ids[0] if prod_ids else None
+        if add_to:
+            # 이미 운영 master 가 있는 LOCAL master — 아직 연결 안 된 바코드만 그 master 에 붙인다.
+            entries = [e for e in entries if not e.get("prod_master_id")]
+            if not entries:
+                continue
         # image_url 이 비어있는 바코드는 정리된 JPEG 를 Storage 에 올려 채운다.
         image_writeback = enrich_images(entries, manifest, uploader, stats, dry_run)
-        payload = [{k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
-                   for e in entries]
-        if dry_run:
+        payload = sorted(({k: e[k] for k in ("barcode", "size", "image_url", "image_source_url")}
+                          for e in entries), key=lambda p: p["barcode"])
+        if add_to:
+            expected = {"master_key": master_key(vals["brand"], vals["name"], vals["ingredients_raw"]),
+                        "ingredients_hash": ingredients_hash(vals["brand"], vals["ingredients_raw"])}
+            if dry_run:
+                res = classify_dryrun_add(target, add_to, expected, payload)
+            else:
+                try:
+                    res = target.add_barcodes(add_to, expected, payload)
+                except Exception as ex:  # noqa: BLE001 — 한 master 실패가 다음 master 를 막지 않게
+                    msg = str(ex)[:500]
+                    print(f"  ERROR add ({vals['brand']} / {vals['name']}) — {msg.splitlines()[0] if msg else ''}")
+                    stats["master_error"] += 1
+                    with src.cursor() as cur:
+                        insert_error_receipts(cur, run_id, local_id, entries, msg)
+                    src.commit()
+                    continue
+                if res.get("master_status") not in ADD_MASTER_STATUSES:
+                    raise SystemExit(f"운영 add_barcode_to_master 가 0024 가 아닙니다 (master_status="
+                                     f"{res.get('master_status')!r}, {vals['brand']} / {vals['name']})"
+                                     " — LOCAL 기록은 남기지 않았습니다")
+            stats[f"add_{res['master_status']}"] += 1
+            print(f"  ADD-BARCODE ({vals['brand']} / {vals['name']}) → 기존 운영 master {add_to}: "
+                  f"{res['master_status']} {len(payload)}개")
+        elif dry_run:
             res = classify_dryrun(target, vals, payload)
         else:
             try:
@@ -497,11 +737,8 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
                 msg = str(ex)[:500]
                 print(f"  ERROR ({vals['brand']} / {vals['name']}) — {msg.splitlines()[0] if msg else ''}")
                 stats["master_error"] += 1
-                err_rows = [{"collected_id": e["collected_id"], "local_master_id": local_id,
-                             "barcode": e["barcode"], "promoted_at": e["promoted_at"],
-                             "result": "error", "prod_master_id": None} for e in entries]
                 with src.cursor() as cur:
-                    insert_receipts(cur, run_id, err_rows, error=msg)
+                    insert_error_receipts(cur, run_id, local_id, entries, msg)
                 src.commit()
                 continue
             if res.get("master_status") not in RPC_MASTER_STATUSES:
@@ -509,7 +746,8 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
                 raise SystemExit(f"운영 RPC가 0021이 아닙니다 (master_status={res.get('master_status')!r},"
                                  f" {vals['brand']} / {vals['name']}) — 운영에 0021 을 먼저 적용."
                                  " 이 master 는 운영에 반영됐을 수 있으나 LOCAL 기록은 남기지 않았습니다")
-        stats[f"master_{res['master_status']}"] += 1
+        if not add_to:
+            stats[f"master_{res['master_status']}"] += 1
         if res["master_status"] == "verified_held":
             print(f"  HOLD verified master ({vals['brand']} / {vals['name']}) — barcode 보류")
         elif res["master_status"] == "review_held":
@@ -525,7 +763,7 @@ def run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=Non
         if dry_run:
             continue
 
-        rows = receipt_rows(local_id, entries, res)
+        rows = add_receipt_rows(local_id, entries, res) if add_to else receipt_rows(local_id, entries, res)
         attach = [(r["prod_master_id"], r["collected_id"], local_id, r["promoted_at"], r["barcode"])
                   for r in rows if r["prod_master_id"]]
         with src.cursor() as cur:
