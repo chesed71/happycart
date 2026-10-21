@@ -632,30 +632,30 @@ def test_merged_child_size_from_name_or_hold():
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # 1b) 부모와 이름이 같은 자식은 이름에서 용량을 뽑지 않고 보류(부모 이름 속 용량 오용 방지).
-        # 보관된 맞추기 전 이름(original_name)은 기록용이라 쓰지 않는다.
+        # 1b) 부모 이름으로 맞춘 적이 있는 자식(original_name 기록)은 이름에 용량이 있어도 뽑지 않고 보류.
+        # 맞춘 뒤 부모 이름이 바뀌면 자식 이름은 옛 부모 이름이라, 부모와 다르다는 것만으로 출처를 알 수 없다.
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent 120g")
         child = _merged_child(cur, parent, SYN_BC_2)
         cur.execute("""update collected_products set size=null, name='N-parent 120g',
                          raw = raw || '{"original_name": "바다마을 날치알 180g"}' where id=%s""", (child,))
         stats = Counter()
         run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
-        check("부모와 같은 이름의 자식은 보류", stats["held_child_no_size"] == 1,
+        check("맞춘 적 있는 자식은 보류", stats["held_child_no_size"] == 1,
               f'got {stats["held_child_no_size"]}')
         conn.rollback()
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
         cur.execute("begin")
-        # 1d) 부모와 이름이 다른 자식(사람이 고침·재추출)은 보관 이름이 아니라 현재 이름에서 뽑는다
+        # 1d) 맞춘 뒤 부모 이름이 바뀌어 이름이 달라진 자식도 보류(옛 부모 이름 속 용량을 쓰지 않음)
         parent = _promotable_parent(cur, SYN_BC_1, name="N-parent-edited")
         child = _merged_child(cur, parent, SYN_BC_2)
-        cur.execute("""update collected_products set size=null, name='고친 이름 185g',
+        cur.execute("""update collected_products set size=null, name='옛 부모 이름 120g',
                          raw = raw || '{"original_name": "옛 이름 180g"}'
                        where id=%s""", (child,))
-        run_promotion(cur, id=str(parent), dry_run=False, stats=Counter())
-        cur.execute("select size from collected_products where id=%s", (child,))
-        got = cur.fetchone()[0]
-        check("고친 자식은 현재 이름에서 용량", got == "185g", f"got {got}")
+        stats = Counter()
+        run_promotion(cur, id=str(parent), dry_run=False, stats=stats)
+        check("부모 이름이 바뀐 맞춘 자식도 보류", stats["held_child_no_size"] == 1,
+              f'got {stats["held_child_no_size"]}')
         conn.rollback()
 
     with connect_test(source_dsn()) as conn, conn.cursor() as cur:
