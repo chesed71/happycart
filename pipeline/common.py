@@ -116,9 +116,8 @@ on conflict (source, source_ref) do update set
                   'deleted_at',         -- 소프트 삭제
                   'manual',             -- 수동 생성 변형 자식
                   'detail_source_ref',  -- 부모 detail 참조
-                  'original_name',      -- 자식 맞추기 전 이름(데이터데스크 sync_merged_children)
-                  'original_brand',     -- 자식 맞추기 전 브랜드
-                  'synced_name'         -- 맞출 때의 부모 이름(promote 용량 추출 판단)
+                  'original_name',      -- 자식 맞추기 전 처음 이름(기록용, 데이터데스크 sync_merged_children)
+                  'original_brand'      -- 자식 맞추기 전 처음 브랜드(기록용)
                 ])), '{}'::jsonb),
   brand = excluded.brand,
   name = excluded.name,

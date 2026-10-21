@@ -148,11 +148,12 @@ def candidate_query(*, id=None, ids=None, source=None, source_ref=None):
 # 동일 기준. 단일 홉만 훑는다(자식의 자식은 비대상).
 MERGED_CHILDREN_LOCK = """
     select id, barcode, size, raw->>'merged_into', coalesce(raw->>'review_tag', ''),
-           -- 맞춘 뒤 그대로인 자식(name = synced_name)만 맞추기 전 이름에서 뽑는다. 키가 있으면 null 이어도
-           -- 그대로(부모 이름 속 용량을 쓰지 않게). 사람이 고쳤거나 재추출된 자식은 현재 이름을 쓴다.
-           case when raw ? 'original_name' and raw ? 'synced_name'
-                     and name is not distinct from raw->>'synced_name'
-                then raw->>'original_name' else name end
+           -- 부모와 이름이 같은 자식(데스크에서 맞춘 자식 등)은 이름에 그 자식만의 용량 정보가 없다 — 부모
+           -- 이름 속 용량을 자식 용량으로 쓰지 않도록 null 로 넘겨 보류시킨다.
+           case when collected_products.name is not distinct from
+                     (select p.name from collected_products p
+                       where p.id::text = collected_products.raw->>'merged_into')
+                then null else collected_products.name end
     from collected_products
     where (raw->>'merged_into') = any(%s)
       and (raw->>'deleted_at') is null
@@ -321,8 +322,7 @@ def run_promotion(cur, *, id=None, ids=None, source=None, source_ref=None,
             stats["held_flagged_child"] += len(members)
             continue
 
-        # 용량이 빈 머지 자식은 자식 상품명에서 뽑아 쓴다. 데이터데스크 '이름·브랜드 부모와 맞추기'로 맞춘
-        # 자식은 맞추기 전 이름(raw.original_name)을 본다(2026-10-21_child_sync_button.sql). 못 뽑으면 그룹째 보류한다 —
+        # 용량이 빈 머지 자식은 자식 상품명에서 뽑아 쓴다. 이름이 부모와 같으면 뽑지 않는다(위 잠금 쿼리). 못 뽑으면 그룹째 보류한다 —
         # product_barcodes.size 는 NOT NULL 이라 그대로 넣으면 승격 전체가 실패하고, 자식만 빼면
         # 위 태그 보류와 같은 이유로 되살릴 수 없게 된다. 데스크에서 자식 용량을 넣으면 풀린다.
         child_sizes = {}
