@@ -9,7 +9,7 @@ import 'product_repository.dart' show RpcExecutor, supabaseClientProvider;
 
 /// MVP 빌드 식별자. 추후 Task 15(릴리스 준비)에서 `package_info_plus` 로
 /// 교체될 예정이다. 지금은 의존성을 늘리지 않고 상수 한 곳에서 관리한다.
-const String kAppVersion = '0.1.0+1';
+const String kAppVersion = '1.0.2+16';
 
 /// 스펙 §4.4 — `scan_events.barcode_format` CHECK 제약.
 const _allowedBarcodeFormats = {'EAN-13', 'EAN-8'};
