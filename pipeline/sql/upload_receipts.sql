@@ -15,12 +15,19 @@ create table if not exists public.upload_receipts (
   promoted_at timestamptz,                       -- 업로드 때 읽은 승격 시각(옛 승격 행은 NULL)
   result text not null check (result in (
     'inserted', 'existing', 'exists', 'conflict',
-    'verified_held', 'review_held', 'renamed_held', 'empty_held', 'error'
+    'verified_held', 'review_held', 'renamed_held', 'empty_held', 'error', 'attach_held'
   )),
   prod_master_id uuid,
   error text,
   created_at timestamptz not null default now()
 );
+
+-- 이미 있는 테이블에도 attach_held(--no-attach 보류)를 허용하도록 CHECK 를 다시 건다(여러 번 적용해도 같음).
+alter table public.upload_receipts drop constraint if exists upload_receipts_result_check;
+alter table public.upload_receipts add constraint upload_receipts_result_check check (result in (
+  'inserted', 'existing', 'exists', 'conflict',
+  'verified_held', 'review_held', 'renamed_held', 'empty_held', 'error', 'attach_held'
+));
 
 create index if not exists upload_receipts_collected_id_idx on public.upload_receipts (collected_id);
 create index if not exists upload_receipts_promoted_at_idx on public.upload_receipts (promoted_at);
