@@ -537,12 +537,47 @@ def test_link_check_single_query():
         _cleanup_upload()
 
 
+def test_no_attach_holds():
+    """--no-attach: 0024 로 갈 master(운영 master 하나)는 부르지 않고 미연결 행마다 attach_held 영수증.
+    dry-run 도 같은 분류, 새 master(0021)는 그대로 올라간다. 플래그 없으면 기존대로 0024."""
+    _cleanup_upload()
+    t = None
+    try:
+        rows = _seed_upload([("업티N", [U1])])
+        t = _RecTarget()
+        _run(t)
+        pm, _, _ = _row_state(rows[U1])
+        r2, _ = _add_child(rows, U1, U2, "업티N")
+        t.ups.clear()
+        st = _run(t, dry_run=True, no_attach=True)
+        check("no-attach dry-run: 호출·영수증 없음, attach_held 집계",
+              t.adds == [] and _row_state(r2)[1] == [] and st.get("master_attach_held") == 1, str(dict(st)))
+        st = _run(t, ids=[r2], no_attach=True)
+        check("no-attach: 0024·0021 호출 없음", t.adds == [] and t.ups == [], f"{t.adds} {t.ups}")
+        p, allr, cur_r = _row_state(r2)
+        check("no-attach: attach_held 영수증·사유·미연결", p is None and cur_r == "attach_held"
+              and allr[-1][2] == f"existing_prod_master: {pm}", str(allr))
+        check("no-attach: 운영에 안 붙음", _target_owner(U2) is None)
+        check("no-attach: 연결된 행엔 영수증 추가 없음", len(_row_state(rows[U1])[1]) == 1, str(_row_state(rows[U1])[1]))
+        check("no-attach: 통계", st.get("master_attach_held") == 1, str(dict(st)))
+        rows3 = _seed_upload([("업티M", [U3])])
+        _run(t, ids=[rows3[U3]], no_attach=True)
+        check("no-attach: 새 master 는 0021 로 올라감", t.ups == [[U3]] and _row_state(rows3[U3])[2] == "inserted",
+              f"{t.ups}")
+        _run(t, ids=[r2])
+        check("플래그 없음: 기존대로 0024", len(t.adds) == 1 and str(_target_owner(U2)) == str(pm), str(t.adds))
+    finally:
+        if t:
+            t.conn.close()
+        _cleanup_upload()
+
+
 def main():
     for t in [test_add_receipt_rows, test_real_add_flow, test_new_master_payload_sorted,
               test_split_prod_ids_not_called, test_dryrun_add, test_recovery_after_remote_commit,
               test_version_check_pg, test_version_check_rest, test_rest_add_request,
               test_link_missing_not_called, test_late_failure_keeps_success,
-              test_single_uploader_lock, test_link_check_single_query]:
+              test_single_uploader_lock, test_link_check_single_query, test_no_attach_holds]:
         try:
             t()
         except Exception as e:  # noqa

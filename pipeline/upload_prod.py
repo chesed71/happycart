@@ -48,6 +48,8 @@ upload_promoted_product_version() 이 21 인지, add_barcode_to_master_version()
   - REST (기본): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (DB 비번 불필요)
   - postgres: --target-dsn (운영 DB 연결문자열)
 
+--no-attach: 기존 운영 master 에 붙일 master(형제 바코드 정확히 1개 경로)는 보내지 않고, 미연결 행마다
+  attach_held 영수증(error 'existing_prod_master: <id>')만 남긴다. dry-run 도 같게 분류. 없으면 기존 동작 그대로.
 --dry-run: 쓰기 없이 운영을 읽어 각 master/barcode가 어떻게 처리될지 분류만 보여준다.
 
 사용:
@@ -473,7 +475,7 @@ def receipt_rows(local_id, entries, res):
     return out
 
 
-def insert_error_receipts(cur, run_id, local_id, items, error):
+def insert_error_receipts(cur, run_id, local_id, items, error, result="error"):
     """미연결 행마다 error 영수증. 쓰기 직전에 그 행을 for update 로 잠그고, 읽은 세대(promoted_at)·바코드
     그대로이고 아직 prod_master_id 가 비어 있을 때만 쓴다 — 그사이 다른 실행이 성공으로 연결한 행에 늦은
     실패가 error 를 덮어 최신 영수증이 되지 않게(성공 기록의 writeback_attachments 재확인과 같은 조건).
@@ -488,7 +490,7 @@ def insert_error_receipts(cur, run_id, local_id, items, error):
             continue
         insert_receipts(cur, run_id, [{"collected_id": e["collected_id"], "local_master_id": local_id,
                                        "barcode": e["barcode"], "promoted_at": e["promoted_at"],
-                                       "result": "error", "prod_master_id": None}], error=error)
+                                       "result": result, "prod_master_id": None}], error=error)
         written += 1
     return written
 
@@ -631,7 +633,7 @@ def run_upload(src, target, *, dry_run=False, **kw):
 
 
 def _run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=None,
-                uploader=None, run_id=None):
+                uploader=None, run_id=None, no_attach=False):
     """승격분을 운영에 올리고 집계(Counter)를 돌려준다.
 
     master 하나의 RPC 가 끝나면 바로 LOCAL 트랜잭션 하나로 영수증·연결 기록(prod_master_id)·
@@ -700,6 +702,17 @@ def _run_upload(src, target, *, ids=None, all_=False, dry_run=False, manifest=No
             # 이미 운영 master 가 있는 LOCAL master — 아직 연결 안 된 바코드만 그 master 에 붙인다.
             entries = [e for e in entries if not e.get("prod_master_id")]
             if not entries:
+                continue
+            if no_attach:
+                # --no-attach: 기존 운영 master 에 붙이지 않는다(0024 는 검증된 master 에 바로 노출) — 보류 영수증만.
+                print(f"  ATTACH-HELD ({vals['brand']} / {vals['name']}) — 기존 운영 master {add_to}, 호출 안 함")
+                stats["master_attach_held"] += 1
+                if dry_run:
+                    continue
+                with src.cursor() as cur:
+                    insert_error_receipts(cur, run_id, local_id, entries,
+                                          f"existing_prod_master: {add_to}", result="attach_held")
+                src.commit()
                 continue
         # image_url 이 비어있는 바코드는 정리된 JPEG 를 Storage 에 올려 채운다.
         image_writeback = enrich_images(entries, manifest, uploader, stats, dry_run)
@@ -818,6 +831,8 @@ def main():
                      help="콤마 구분 collected_products.id — 그 행의 승격 master 만 업로드")
     grp.add_argument("--all", dest="all_", action="store_true",
                      help="이미 연결된 master 포함 모든 승격 master 업로드 (기본: 미연결 master 만)")
+    ap.add_argument("--no-attach", action="store_true",
+                    help="기존 운영 master 에 바코드를 붙이는(0024) master 는 보내지 않고 attach_held 영수증만 남김")
     args = ap.parse_args()
 
     target = PgTarget(args.target_dsn) if args.target_dsn else RestTarget()
@@ -826,7 +841,7 @@ def main():
 
     with connect() as src:
         stats = run_upload(src, target, ids=args.ids, all_=args.all_, dry_run=args.dry_run,
-                           manifest=manifest, uploader=uploader)
+                           manifest=manifest, uploader=uploader, no_attach=args.no_attach)
     print(dict(stats))
 
 
